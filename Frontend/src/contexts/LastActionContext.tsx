@@ -3,7 +3,7 @@ import { createContext, useContext, useState, ReactNode } from "react";
 interface LastActionState {
   description: string;
   timestamp: Date;
-} | null;
+}
 
 interface LastActionContextValue {
   lastAction: { description: string; timestamp: Date } | null;

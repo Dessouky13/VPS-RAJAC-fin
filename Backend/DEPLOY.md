@@ -1,49 +1,177 @@
-Deploying Backend to Google Cloud Run (low-cost serverless)
+# Backend Deployment — VPS + Docker Compose
 
-Why Cloud Run?
-- Pay-per-use: you only pay when your container is running (free tier available).
-- Easy to deploy Docker container and integrate with Google IAM and Secret Manager.
-- Works well with Google Sheets/Drive APIs because you can use service account credentials stored in Secret Manager.
+This guide replaces the old Cloud Run deployment. The backend now runs on your own VPS behind Nginx.
 
-Steps (summary):
-1. Install gcloud CLI and authenticate
-2. Build container image and push to Google Container Registry (or Artifact Registry)
-3. Create Cloud Run service with environment variables and secrets (GOOGLE_CLIENT_EMAIL, GOOGLE_PRIVATE_KEY, GOOGLE_MASTER_SHEET_ID)
-4. Make sure service account has access to the spreadsheet (share the sheet with the service account email)
+---
 
-Detailed commands:
+## Prerequisites
 
-# Authenticate with Google Cloud
-gcloud auth login
-gcloud config set project YOUR_GCP_PROJECT_ID
+- VPS with Ubuntu 22.04+ (or Debian)
+- Domain name pointing to your VPS IP (for HTTPS)
+- Ports 80 and 443 open in firewall
 
-# Build and push image (Cloud Build is easier; this uses gcloud build)
-gcloud builds submit --tag gcr.io/YOUR_GCP_PROJECT_ID/rajac-finance-backend:latest .
+---
 
-# Deploy to Cloud Run
-gcloud run deploy rajac-finance-backend \
-  --image gcr.io/YOUR_GCP_PROJECT_ID/rajac-finance-backend:latest \
-  --region YOUR_REGION \
-  --platform managed \
-  --allow-unauthenticated \
-  --set-env-vars "GOOGLE_MASTER_SHEET_ID=your_sheet_id"
+## 1. Install Docker
 
-# Use Secret Manager for credentials
-# 1) Create secret with your service account JSON (do NOT paste private key directly into env var)
-#    echo '{...service account json...}' | gcloud secrets create google_sa_key --data-file=-
-# 2) Grant Cloud Run runtime access to the secret
-#    gcloud secrets add-iam-policy-binding google_sa_key --member=serviceAccount:$(gcloud run services describe rajac-finance-backend --region=YOUR_REGION --format='value(spec.template.spec.serviceAccountName)') --role=roles/secretmanager.secretAccessor
-# 3) Set the secret as an env var when deploying (Secret Manager integration)
-#    gcloud run services update rajac-finance-backend --add-secrets GOOGLE_SA_JSON=google_sa_key:latest
+```bash
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker $USER
+# log out and back in
+```
 
-# Inside your app, you can load the JSON from process.env.GOOGLE_SA_JSON or read from Secret Manager using the client library.
+---
 
-Notes:
-- The current backend expects GOOGLE_CLIENT_EMAIL and GOOGLE_PRIVATE_KEY as environment variables. If you store the whole JSON in Secret Manager, update `googleSheets.js` to parse that JSON and set the auth accordingly (I can add this change for you).
-- Remember to share the Google Sheet with the service account email (Editor permission).
+## 2. Clone & Configure
 
-If you want, I can:
-- Add support to read the full service-account JSON from a single env var (e.g., `GOOGLE_SA_JSON`) and initialize GoogleAuth from that to simplify Cloud Run secret wiring.
-- Create a small CI GitHub Action to build and push automatically when you push to main.
+```bash
+git clone <your-repo-url> /opt/rajac-finance
+cd /opt/rajac-finance/Backend
 
-*** End of guide ***
+cp .env.example .env
+nano .env
+```
+
+**Required values to set in `.env`:**
+
+```env
+POSTGRES_PASSWORD=your_strong_database_password
+JWT_SECRET=your_64_char_random_secret_here
+FRONTEND_URL=https://your-app.vercel.app
+ADMIN_PASSWORD=your_admin_password
+HR_PASSWORD=your_hr_password
+```
+
+Generate a strong JWT secret:
+```bash
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+```
+
+---
+
+## 3. Start Services
+
+```bash
+cd /opt/rajac-finance/Backend
+docker compose up -d
+
+# Check status
+docker compose ps
+```
+
+Both `postgres` and `backend` should show `Up (healthy)`.
+
+The backend auto-creates all database tables on first startup.
+
+---
+
+## 4. Nginx Reverse Proxy
+
+```bash
+sudo apt install nginx certbot python3-certbot-nginx -y
+```
+
+Create `/etc/nginx/sites-available/rajac`:
+
+```nginx
+server {
+    listen 80;
+    server_name api.yourdomain.com;
+
+    location / {
+        proxy_pass         http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade $http_upgrade;
+        proxy_set_header   Connection 'upgrade';
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Real-IP $remote_addr;
+        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+```
+
+```bash
+sudo ln -s /etc/nginx/sites-available/rajac /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+
+# Get SSL certificate
+sudo certbot --nginx -d api.yourdomain.com
+```
+
+---
+
+## 5. Verify
+
+```bash
+# Health check
+curl https://api.yourdomain.com/health
+
+# Should return:
+# {"ok":true,"db":"connected","uptime":...}
+```
+
+---
+
+## 6. Frontend — Vercel Environment Variable
+
+In your Vercel project settings → Environment Variables:
+
+```
+VITE_API_BASE_URL = https://api.yourdomain.com
+```
+
+Redeploy the frontend after setting this.
+
+---
+
+## 7. Updating the Backend
+
+```bash
+cd /opt/rajac-finance
+git pull
+cd Backend
+docker compose up -d --build backend
+```
+
+PostgreSQL data lives in a named Docker volume (`postgres_data`) and is **not affected** by rebuilds.
+
+---
+
+## 8. Database Backup (Manual)
+
+```bash
+# Dump
+docker exec rajac-postgres pg_dump -U rajac rajac > backup_$(date +%Y%m%d).sql
+
+# Restore
+docker exec -i rajac-postgres psql -U rajac rajac < backup_20260319.sql
+```
+
+The app also provides in-app backups (up to 5 slots) via the Admin → Create Backup menu. These are stored in the `backup_index` / `backup_data` tables and survive server restarts.
+
+---
+
+## 9. Logs
+
+```bash
+# Backend logs
+docker compose logs -f backend
+
+# PostgreSQL logs
+docker compose logs -f postgres
+```
+
+---
+
+## 10. Troubleshooting
+
+| Symptom | Likely Cause | Fix |
+|---|---|---|
+| Backend container exits immediately | `JWT_SECRET` not set | Check `.env`, `docker compose up -d` |
+| `CORS error` in browser | `FRONTEND_URL` mismatch | Set correct Vercel URL in `.env`, restart backend |
+| `503 Bad Gateway` from Nginx | Backend not running on port 3000 | `docker compose ps`, check logs |
+| Login always fails | Wrong admin password | Check `ADMIN_PASSWORD` in `.env`; if DB already seeded with old password, change via `POST /api/auth/change-password` |
+| Tables missing | First-run schema not applied | `docker compose restart backend` — schema runs on startup |

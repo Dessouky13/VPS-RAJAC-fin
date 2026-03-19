@@ -25,8 +25,11 @@ import {
   Percent,
   Save,
   Edit2,
-  Phone
+  Phone,
+  CheckCircle2,
+  AlertTriangle,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 interface Student {
   studentID?: string;
@@ -40,7 +43,6 @@ interface Student {
   phoneNumber?: string;
   Phone_Number?: string;
   phone?: string;
-  // Legacy fields for backward compatibility
   id?: string;
   fees?: number;
   discount?: number;
@@ -48,7 +50,6 @@ interface Student {
   remainingAmount?: number;
   paid?: number;
   remaining?: number;
-  // additional possible shapes from backend
   netAmount?: number;
   Net_Amount?: number;
   remainingBalance?: number;
@@ -73,7 +74,6 @@ export function Fees() {
   const [canEditDiscount, setCanEditDiscount] = useState(false);
   const { toast } = useToast();
 
-  // Edit Total Fees dialog state
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [editTotalFeesValue, setEditTotalFeesValue] = useState("");
 
@@ -89,10 +89,9 @@ export function Fees() {
 
     setLoading(true);
     try {
-  const response = await getStudentByIdentifier(searchName);
+      const response = await getStudentByIdentifier(searchName);
       if (response.ok && response.data) {
-  const student: any = response.data;
-        // Use backend-provided authoritative fields
+        const student: any = response.data;
         const normalizedStudent = {
           ...student,
           baseFees: student.baseFees || student.fees || 0,
@@ -108,7 +107,7 @@ export function Fees() {
           ...prev,
           discountPct: String(normalizedStudent.discountPct || '')
         }));
-        
+
         toast({
           title: t("تم العثور على الطالب", "Student Found"),
           description: t(`تم العثور على ${student.name}`, `Found ${student.name}`),
@@ -133,15 +132,12 @@ export function Fees() {
   };
 
   useEffect(() => {
-    // load students for the selected grade (optimized with backend filtering)
     const load = async () => {
       if (!selectedGrade || selectedGrade === 'All') {
         setStudentsByGrade([]);
         return;
       }
-
       try {
-        // Use backend filtering for better performance
         const res = await fetch(`${API_CF}/students?grade=${encodeURIComponent(selectedGrade)}`);
         const data = await res.json();
         const raw = data.students || [];
@@ -161,7 +157,6 @@ export function Fees() {
   const handleSelectStudentFromGrade = async (id: string) => {
     const s = studentsByGrade.find(st => st.id === id);
     if (s) {
-      // Search directly with the student name (don't wait for state update)
       try {
         const response = await getStudentByIdentifier(s.name);
         if (response.ok && response.data) {
@@ -182,7 +177,6 @@ export function Fees() {
             ...prev,
             discountPct: String(normalizedStudent.discountPct || '')
           }));
-          // Keep the grade and student list visible after selection
         }
       } catch (error) {
         console.error('Error selecting student from grade dropdown:', error);
@@ -192,32 +186,20 @@ export function Fees() {
 
   const handleUpdateDiscount = async () => {
     if (!selectedStudent || !paymentForm.discountPct) return;
-    
-    // Save previous state for undo
     setPreviousStudentState(JSON.parse(JSON.stringify(selectedStudent)));
-    
     setLoading(true);
     try {
       const response = await updateStudentDiscount({
         studentId: selectedStudent.studentID || selectedStudent.id,
         discountPercent: parseFloat(paymentForm.discountPct)
       });
-      
       if (response.ok) {
-        toast({
-          title: "تم تحديث الخصم",
-          description: `تم تطبيق خصم ${paymentForm.discountPct}%`,
-        });
+        toast({ title: "تم تحديث الخصم", description: `تم تطبيق خصم ${paymentForm.discountPct}%` });
         setCanEditDiscount(false);
-        // Refresh student data
         handleSearch();
       }
     } catch (error) {
-      toast({
-        title: "خطأ في تحديث الخصم",
-        description: "حدث خطأ أثناء تحديث الخصم",
-        variant: "destructive"
-      });
+      toast({ title: "خطأ في تحديث الخصم", description: "حدث خطأ أثناء تحديث الخصم", variant: "destructive" });
     } finally {
       setLoading(false);
     }
@@ -240,43 +222,24 @@ export function Fees() {
 
   const handleSavePayment = async () => {
     if (!selectedStudent) {
-      toast({
-        title: "خطأ",
-        description: "يرجى البحث عن طالب أولاً",
-        variant: "destructive"
-      });
+      toast({ title: "خطأ", description: "يرجى البحث عن طالب أولاً", variant: "destructive" });
       return;
     }
-
     if (!paymentForm.amount || !paymentForm.method) {
-      toast({
-        title: "خطأ",
-        description: "يرجى ملء جميع الحقول المطلوبة",
-        variant: "destructive"
-      });
+      toast({ title: "خطأ", description: "يرجى ملء جميع الحقول المطلوبة", variant: "destructive" });
       return;
     }
 
-    // Check if payment amount exceeds remaining amount
     const paymentAmount = parseFloat(paymentForm.amount);
     const unpaidAmount = selectedStudent.unpaid || selectedStudent.remainingAmount || selectedStudent.remaining || 0;
     if (paymentAmount > unpaidAmount) {
-      toast({
-        title: "خطأ في المبلغ",
-        description: `المبلغ أكبر من المبلغ المتبقي (${unpaidAmount} جنيه)`,
-        variant: "destructive"
-      });
+      toast({ title: "خطأ في المبلغ", description: `المبلغ أكبر من المبلغ المتبقي (${unpaidAmount} جنيه)`, variant: "destructive" });
       return;
     }
 
     setLoading(true);
     try {
-      // Save previous state for undo
       setPreviousStudentState(JSON.parse(JSON.stringify(selectedStudent)));
-
-      // Include discount if updated
-      const discountPct = paymentForm.discountPct ? parseFloat(paymentForm.discountPct) : undefined;
-
       const response = await savePayment({
         studentId: selectedStudent.studentID || selectedStudent.id,
         amountPaid: paymentAmount,
@@ -286,15 +249,8 @@ export function Fees() {
       });
 
       if (response.ok) {
-        toast({
-          title: "تم حفظ الدفع بنجاح",
-          description: `تم تسجيل دفع ${paymentForm.amount} جنيه للطالب ${selectedStudent.name}`,
-        });
+        toast({ title: "تم حفظ الدفع بنجاح", description: `تم تسجيل دفع ${paymentForm.amount} جنيه للطالب ${selectedStudent.name}` });
 
-        // Update student data with response from backend - use the student object from response
-        // Backend may return the updated student in several shapes. Prefer explicit student object,
-        // otherwise fall back to the top-level data payload. If not available, re-fetch the student
-        // from the server to ensure authoritative values (Net_Amount, Remaining_Balance).
         const returnedStudent = (response.data && (response.data.student || response.data)) || (response.student || null);
         if (returnedStudent) {
           const upd = returnedStudent;
@@ -310,91 +266,54 @@ export function Fees() {
             unpaid: upd.unpaid || upd.remainingAmount || Number(upd.Remaining_Balance) || selectedStudent.unpaid
           });
         } else {
-          // If backend didn't return student data, re-run the search to fetch authoritative record
           await handleSearch();
         }
 
-        // Notify other parts of the UI (Dashboard, Balances, Transactions) to refresh analytics
-        try {
-          window.dispatchEvent(new CustomEvent('finance.updated'));
-        } catch (e) {
-          // ignore if dispatching fails in non-browser contexts
-        }
+        try { window.dispatchEvent(new CustomEvent('finance.updated')); } catch (e) {}
 
-        // Reset form but keep discount
         setPaymentForm(prev => ({
           discountPct: prev.discountPct,
           amount: "",
           method: "",
           date: new Date().toISOString().split('T')[0]
         }));
-        // Reset grade filter to default 'All' after successful payment
         setSelectedGrade('All');
         setStudentsByGrade([]);
       } else {
-        toast({
-          title: "فشل في حفظ الدفع",
-          description: response.message || "حدث خطأ أثناء حفظ الدفع",
-          variant: "destructive"
-        });
+        toast({ title: "فشل في حفظ الدفع", description: response.message || "حدث خطأ أثناء حفظ الدفع", variant: "destructive" });
       }
     } catch (error) {
-      toast({
-        title: "خطأ في الحفظ",
-        description: "حدث خطأ أثناء حفظ الدفع",
-        variant: "destructive"
-      });
+      toast({ title: "خطأ في الحفظ", description: "حدث خطأ أثناء حفظ الدفع", variant: "destructive" });
     } finally {
       setLoading(false);
     }
   };
 
-  // Handle opening the edit total fees dialog
   const handleOpenEditDialog = () => {
     if (!selectedStudent) return;
     setEditTotalFeesValue(String(selectedStudent.baseFees || selectedStudent.fees || 0));
     setIsEditDialogOpen(true);
   };
 
-  // Handle saving the updated total fees
   const handleSaveTotalFees = async () => {
     if (!selectedStudent) return;
-
-    // Validation
     const newTotalFees = parseFloat(editTotalFeesValue);
-
     if (isNaN(newTotalFees)) {
-      toast({
-        title: t("خطأ في الإدخال", "Invalid Input"),
-        description: t("يجب إدخال رقم صحيح", "Please enter a valid number"),
-        variant: "destructive"
-      });
+      toast({ title: t("خطأ في الإدخال", "Invalid Input"), description: t("يجب إدخال رقم صحيح", "Please enter a valid number"), variant: "destructive" });
       return;
     }
-
     if (newTotalFees < 0) {
-      toast({
-        title: t("خطأ في الإدخال", "Invalid Input"),
-        description: t("لا يمكن أن تكون الرسوم سالبة", "Total fees cannot be negative"),
-        variant: "destructive"
-      });
+      toast({ title: t("خطأ في الإدخال", "Invalid Input"), description: t("لا يمكن أن تكون الرسوم سالبة", "Total fees cannot be negative"), variant: "destructive" });
       return;
     }
-
     if (newTotalFees > 1000000) {
-      toast({
-        title: t("خطأ في الإدخال", "Invalid Input"),
-        description: t("الرسوم تتجاوز الحد الأقصى المسموح (1,000,000 جنيه)", "Total fees exceed maximum allowed (1,000,000 EGP)"),
-        variant: "destructive"
-      });
+      toast({ title: t("خطأ في الإدخال", "Invalid Input"), description: t("الرسوم تتجاوز الحد الأقصى المسموح (1,000,000 جنيه)", "Total fees exceed maximum allowed (1,000,000 EGP)"), variant: "destructive" });
       return;
     }
 
     setLoading(true);
     try {
-      // Save previous state for undo
       setPreviousStudentState(JSON.parse(JSON.stringify(selectedStudent)));
-
       const response = await updateStudentTotalFees({
         studentId: selectedStudent.studentID || selectedStudent.id || '',
         totalFees: newTotalFees,
@@ -404,13 +323,8 @@ export function Fees() {
       if (response.ok && response.data) {
         toast({
           title: t("تم تحديث الرسوم بنجاح", "Fees Updated Successfully"),
-          description: t(
-            `تم تحديث إجمالي الرسوم إلى ${newTotalFees.toLocaleString()} جنيه`,
-            `Total fees updated to ${newTotalFees.toLocaleString()} EGP`
-          ),
+          description: t(`تم تحديث إجمالي الرسوم إلى ${newTotalFees.toLocaleString()} جنيه`, `Total fees updated to ${newTotalFees.toLocaleString()} EGP`),
         });
-
-        // Update local student state with new values from backend
         const updatedData = response.data.student || response.data;
         setSelectedStudent({
           ...selectedStudent,
@@ -423,257 +337,218 @@ export function Fees() {
           remainingAmount: updatedData.remainingBalance || 0,
           remaining: updatedData.remainingBalance || 0
         });
-
-        // Close dialog
         setIsEditDialogOpen(false);
-
-        // Notify other parts of the UI to refresh
-        try {
-          window.dispatchEvent(new CustomEvent('finance.updated'));
-        } catch (e) {
-          // ignore if dispatching fails
-        }
+        try { window.dispatchEvent(new CustomEvent('finance.updated')); } catch (e) {}
       } else {
-        toast({
-          title: t("فشل في تحديث الرسوم", "Failed to Update Fees"),
-          description: response.message || t("حدث خطأ أثناء تحديث الرسوم", "An error occurred while updating fees"),
-          variant: "destructive"
-        });
+        toast({ title: t("فشل في تحديث الرسوم", "Failed to Update Fees"), description: response.message || t("حدث خطأ أثناء تحديث الرسوم", "An error occurred while updating fees"), variant: "destructive" });
       }
     } catch (error) {
-      toast({
-        title: t("خطأ في التحديث", "Update Error"),
-        description: t("حدث خطأ أثناء تحديث الرسوم", "An error occurred while updating fees"),
-        variant: "destructive"
-      });
+      toast({ title: t("خطأ في التحديث", "Update Error"), description: t("حدث خطأ أثناء تحديث الرسوم", "An error occurred while updating fees"), variant: "destructive" });
     } finally {
       setLoading(false);
     }
   };
 
+  const phoneVal = selectedStudent?.phoneNumber || selectedStudent?.Phone_Number || selectedStudent?.phone;
+
   return (
-    <div className="space-y-6 fade-in" dir={isArabic ? "rtl" : "ltr"}>
+    <div className="space-y-6 section-enter" dir={isArabic ? "rtl" : "ltr"}>
       <div>
-        <h1 className="text-3xl font-bold text-foreground">
-          {t("إدارة الرسوم", "Fee Management")}
-        </h1>
-        <p className="text-muted-foreground">
-          {t("البحث عن الطلاب وتسجيل المدفوعات", "Search students and record payments")}
-        </p>
+        <h1 className="text-2xl font-bold text-foreground">{t("إدارة الرسوم", "Fee Management")}</h1>
+        <p className="text-sm text-muted-foreground">{t("البحث عن الطلاب وتسجيل المدفوعات", "Search students and record payments")}</p>
       </div>
 
       {/* Search Section */}
-      <Card className="bg-gradient-card">
-        <CardHeader>
-          <CardTitle className={`flex items-center space-x-2 ${isArabic ? 'space-x-reverse' : ''}`}>
-            <Search className="h-5 w-5 text-primary" />
-            <span>{t("البحث عن طالب", "Search Student")}</span>
+      <Card className="border-border">
+        <CardHeader className="pb-4">
+          <CardTitle className={cn("flex items-center gap-2 text-base", isArabic ? "flex-row-reverse" : "")}>
+            <div className="p-1.5 rounded-md bg-primary/10">
+              <Search className="h-4 w-4 text-primary" />
+            </div>
+            {t("البحث عن طالب", "Search Student")}
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
-              <div className="md:col-span-2">
-                <Label htmlFor="gradeSelect">{t("الصف", "Grade")}</Label>
-                <select
-                  id="gradeSelect"
-                  value={selectedGrade}
-                  onChange={(e) => setSelectedGrade(e.target.value)}
-                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                >
-                  {grades.map((g) => (
-                    <option key={g} value={g}>{g}</option>
-                  ))}
-                </select>
-              </div>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+            <div className="md:col-span-2 space-y-1.5">
+              <Label className="text-xs font-medium">{t("الصف", "Grade")}</Label>
+              <select
+                value={selectedGrade}
+                onChange={(e) => setSelectedGrade(e.target.value)}
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/25"
+              >
+                {grades.map((g) => <option key={g} value={g}>{g}</option>)}
+              </select>
+            </div>
 
-              <div className="md:col-span-3">
-                <Label htmlFor="studentPicker">{t("اختر طالبًا", "Select Student")}</Label>
-                <select
-                  id="studentPicker"
-                  value={selectedStudent?.studentID || ''}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    if (val) handleSelectStudentFromGrade(val);
-                  }}
-                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                >
-                  {studentsByGrade.length === 0 ? (
-                    <option value="">{t("اختر صفًا لرؤية الطلاب", "Select a grade to see students")}</option>
-                  ) : (
-                    studentsByGrade.map((s) => (
-                      <option key={s.id} value={s.id}>{s.name}</option>
-                    ))
-                  )}
-                </select>
-              </div>
+            <div className="md:col-span-3 space-y-1.5">
+              <Label className="text-xs font-medium">{t("اختر طالبًا", "Select Student")}</Label>
+              <select
+                value={selectedStudent?.studentID || ''}
+                onChange={(e) => { const val = e.target.value; if (val) handleSelectStudentFromGrade(val); }}
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/25"
+              >
+                {studentsByGrade.length === 0
+                  ? <option value="">{t("اختر صفًا لرؤية الطلاب", "Select a grade to see students")}</option>
+                  : studentsByGrade.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)
+                }
+              </select>
+            </div>
 
-              <div className="md:col-span-5">
-                <Label htmlFor="studentName">
-                  {t("الاسم الكامل للطالب", "Student Full Name")}
-                </Label>
+            <div className="md:col-span-5 space-y-1.5">
+              <Label className="text-xs font-medium">{t("الاسم الكامل للطالب", "Student Full Name")}</Label>
+              <div className="relative">
+                <Search className={cn("absolute top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground", isArabic ? "right-3" : "left-3")} />
                 <Input
-                  id="studentName"
                   placeholder={t("أدخل الاسم الكامل للطالب", "Enter student full name")}
                   value={searchName}
                   onChange={(e) => setSearchName(e.target.value)}
                   onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
+                  className={cn("text-sm", isArabic ? "pr-10" : "pl-10")}
                 />
               </div>
-
-              <div className="md:col-span-2 flex items-end">
-                <Button onClick={handleSearch} disabled={loading} className="bg-primary hover:bg-primary/90 w-full">
-                  <Search className={`h-4 w-4 ${isArabic ? 'ml-2' : 'mr-2'}`} />
-                  {t("بحث", "Search")}
-                </Button>
-              </div>
             </div>
-          </CardContent>
+
+            <div className="md:col-span-2">
+              <Button onClick={handleSearch} disabled={loading} className="w-full bg-primary hover:bg-primary/90 gap-2">
+                <Search className="h-4 w-4" />
+                {loading ? t("جاري البحث...", "Searching...") : t("بحث", "Search")}
+              </Button>
+            </div>
+          </div>
+        </CardContent>
       </Card>
 
       {/* Student Details */}
       {selectedStudent && (
-        <Card className="bg-gradient-card border-primary/20 scale-in">
-          <CardHeader>
-            <div className={`flex items-center justify-between ${isArabic ? 'flex-row-reverse' : ''}`}>
-              <CardTitle className={`flex items-center space-x-2 ${isArabic ? 'space-x-reverse' : ''}`}>
-                <User className="h-5 w-5 text-primary" />
-                <span>{t("بيانات الطالب", "Student Details")}</span>
+        <Card className="border-l-4 border-l-primary border-border scale-in">
+          <CardHeader className="pb-4">
+            <div className={cn("flex items-center justify-between", isArabic ? "flex-row-reverse" : "")}>
+              <CardTitle className={cn("flex items-center gap-2 text-base", isArabic ? "flex-row-reverse" : "")}>
+                <div className="p-1.5 rounded-md bg-primary/10">
+                  <User className="h-4 w-4 text-primary" />
+                </div>
+                {t("بيانات الطالب", "Student Details")}
               </CardTitle>
               {previousStudentState && (
-                <Button 
-                  variant="outline" 
-                  size="sm"
-                  onClick={handleUndo}
-                  className="gap-2"
-                >
+                <Button variant="outline" size="sm" onClick={handleUndo} className="gap-1.5 text-xs h-8">
                   ↶ {t("تراجع", "Undo")}
                 </Button>
               )}
             </div>
           </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
-              <div className="text-center p-4 bg-background/50 rounded-lg">
-                <p className="text-sm text-muted-foreground">{t("الاسم", "Name")}</p>
-                <p className="text-lg font-semibold">{selectedStudent.name}</p>
+          <CardContent className="space-y-6">
+            {/* Stat chips row */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+              {/* Name */}
+              <div className="col-span-2 sm:col-span-1 p-3 bg-muted/50 rounded-lg border border-border">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">{t("الاسم", "Name")}</p>
+                <p className="text-sm font-semibold truncate">{selectedStudent.name}</p>
               </div>
-              <div className="text-center p-4 bg-background/50 rounded-lg">
-                <p className="text-sm text-muted-foreground">{t("الصف", "Grade")}</p>
-                <p className="text-lg font-semibold">{selectedStudent.grade}</p>
+              {/* Grade */}
+              <div className="p-3 bg-muted/50 rounded-lg border border-border">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">{t("الصف", "Grade")}</p>
+                <Badge variant="outline" className="text-xs">{selectedStudent.grade}</Badge>
               </div>
-              <div className="text-center p-4 bg-background/50 rounded-lg relative">
-                <p className="text-sm text-muted-foreground">{t("إجمالي الرسوم", "Total Fees")}</p>
-                <div className="flex items-center justify-center gap-2">
-                  <p className="text-lg font-semibold text-primary">
-                    {(selectedStudent.baseFees || selectedStudent.fees || 0).toLocaleString()} {t("جنيه", "EGP")}
+              {/* Total Fees */}
+              <div className="p-3 bg-muted/50 rounded-lg border border-border relative">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">{t("إجمالي الرسوم", "Total Fees")}</p>
+                <div className="flex items-center gap-1">
+                  <p className="text-sm font-bold text-primary stat-number">
+                    {(selectedStudent.baseFees || selectedStudent.fees || 0).toLocaleString()}
                   </p>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6"
-                    onClick={handleOpenEditDialog}
-                    title={t("تعديل إجمالي الرسوم", "Edit Total Fees")}
-                  >
-                    <Edit2 className="h-4 w-4" />
+                  <Button variant="ghost" size="icon" className="h-5 w-5 -mt-0.5" onClick={handleOpenEditDialog} title={t("تعديل", "Edit")}>
+                    <Edit2 className="h-3 w-3" />
                   </Button>
                 </div>
               </div>
-              <div className="text-center p-4 bg-background/50 rounded-lg">
-                <p className="text-sm text-muted-foreground">{t("المبلغ بعد الخصم", "Net Amount")}</p>
-                <p className="text-lg font-semibold text-accent">
-                  {selectedStudent.netFees?.toLocaleString()} {t("جنيه", "EGP")}
-                </p>
-                {(selectedStudent.discountPct || selectedStudent.discount) && (selectedStudent.discountPct || selectedStudent.discount)! > 0 && (
-                  <p className="text-xs text-muted-foreground">
-                    {t("خصم", "Discount")} {selectedStudent.discountPct || selectedStudent.discount}%
-                  </p>
-                )}
-              </div>
-              <div className="text-center p-4 bg-background/50 rounded-lg">
-                <p className="text-sm text-muted-foreground">{t("المبلغ المدفوع", "Amount Paid")}</p>
-                <p className="text-lg font-semibold text-success">
-                  {(selectedStudent.totalPaid || 0).toLocaleString()} {t("جنيه", "EGP")}
+              {/* Net Amount */}
+              <div className="p-3 bg-muted/50 rounded-lg border border-border">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">{t("الصافي", "Net")}</p>
+                <p className="text-sm font-bold stat-number">
+                  {selectedStudent.netFees?.toLocaleString()}
+                  {(selectedStudent.discountPct || selectedStudent.discount) ? (
+                    <span className="text-[10px] text-success ml-1">-{selectedStudent.discountPct || selectedStudent.discount}%</span>
+                  ) : null}
                 </p>
               </div>
-              <div className="text-center p-4 bg-background/50 rounded-lg">
-                <p className="text-sm text-muted-foreground">{t("المبلغ المتبقي", "Remaining Amount")}</p>
-                <p className="text-lg font-semibold text-warning">
-                  {(selectedStudent.unpaid || 0).toLocaleString()} {t("جنيه", "EGP")}
-                </p>
+              {/* Paid */}
+              <div className="p-3 bg-success/10 rounded-lg border border-success/20">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">{t("مدفوع", "Paid")}</p>
+                <p className="text-sm font-bold text-success stat-number">{(selectedStudent.totalPaid || 0).toLocaleString()}</p>
               </div>
-              {(selectedStudent.phoneNumber || selectedStudent.Phone_Number || selectedStudent.phone) && (
-                <div className="text-center p-4 bg-background/50 rounded-lg flex flex-col items-center gap-1">
-                  <p className="text-sm text-muted-foreground flex items-center gap-1">
-                    <Phone className="h-3 w-3" /> {t("واتساب / هاتف", "WhatsApp / Phone")}
-                  </p>
-                  <a
-                    href={`https://wa.me/${(selectedStudent.phoneNumber || selectedStudent.Phone_Number || selectedStudent.phone || '').replace(/\D/g, '')}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-base font-semibold text-primary hover:underline font-mono"
-                  >
-                    {selectedStudent.phoneNumber || selectedStudent.Phone_Number || selectedStudent.phone}
-                  </a>
-                </div>
-              )}
+              {/* Remaining */}
+              <div className="p-3 bg-warning/10 rounded-lg border border-warning/20">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1">{t("متبقي", "Remaining")}</p>
+                <p className="text-sm font-bold text-warning stat-number">{(selectedStudent.unpaid || 0).toLocaleString()}</p>
+              </div>
             </div>
 
+            {/* WhatsApp */}
+            {phoneVal && (
+              <div className="flex items-center gap-2 p-3 bg-muted/30 rounded-lg border border-border w-fit">
+                <Phone className="h-4 w-4 text-muted-foreground" />
+                <a
+                  href={`https://wa.me/${phoneVal.replace(/\D/g, '')}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-sm font-medium text-primary hover:underline font-mono"
+                >
+                  {phoneVal}
+                </a>
+              </div>
+            )}
+
             {/* Payment Form */}
-            <div className="border-t pt-6">
-              <h3 className="text-lg font-semibold mb-4">
-                {t("تسجيل دفع جديد", "Record New Payment")}
-              </h3>
+            <div className="border-t pt-5">
+              <div className={cn("flex items-center gap-2 mb-4", isArabic ? "flex-row-reverse" : "")}>
+                <div className="p-1.5 rounded-md bg-primary/10">
+                  <CreditCard className="h-4 w-4 text-primary" />
+                </div>
+                <h3 className="text-sm font-semibold">{t("تسجيل دفع جديد", "Record New Payment")}</h3>
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="discountPct">{t("الخصم (%)", "Discount (%)")}</Label>
+                {/* Discount */}
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-medium">{t("الخصم (%)", "Discount (%)")}</Label>
                   <div className="flex gap-2">
                     <div className="relative flex-1">
-                      <Percent className="absolute right-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                      <Percent className={cn("absolute top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground", isArabic ? "right-3" : "left-3")} />
                       <Input
-                        id="discountPct"
                         type="number"
                         placeholder="0"
                         value={paymentForm.discountPct}
                         onChange={(e) => setPaymentForm({...paymentForm, discountPct: e.target.value})}
-                        className="pr-10"
+                        className={cn(isArabic ? "pr-10" : "pl-10")}
                         disabled={!canEditDiscount}
                       />
                     </div>
                     {canEditDiscount && paymentForm.discountPct && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={handleUpdateDiscount}
-                        disabled={loading}
-                      >
+                      <Button type="button" size="sm" variant="outline" onClick={handleUpdateDiscount} disabled={loading} className="text-xs">
                         {t("تطبيق", "Apply")}
                       </Button>
                     )}
                   </div>
-                  {!canEditDiscount && selectedStudent?.discount && (
-                    <p className="text-xs text-muted-foreground">
-                      {t("الخصم مطبق بالفعل:", "Discount already applied:")} {selectedStudent.discount}%
-                    </p>
-                  )}
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="amount">{t("مبلغ الدفع *", "Payment Amount *")}</Label>
+
+                {/* Amount */}
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-medium">{t("مبلغ الدفع *", "Payment Amount *")}</Label>
                   <div className="relative">
-                    <DollarSign className="absolute right-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <DollarSign className={cn("absolute top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground", isArabic ? "right-3" : "left-3")} />
                     <Input
-                      id="amount"
                       type="number"
                       placeholder={t("المبلغ", "Amount")}
                       value={paymentForm.amount}
                       onChange={(e) => setPaymentForm({...paymentForm, amount: e.target.value})}
-                      className="pr-10"
-                      required
+                      className={cn("text-base font-semibold", isArabic ? "pr-10" : "pl-10")}
                     />
                   </div>
                 </div>
-                <div className="space-y-2">
-                  <Label>{t("طريقة الدفع *", "Payment Method *")}</Label>
+
+                {/* Method */}
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-medium">{t("طريقة الدفع *", "Payment Method *")}</Label>
                   <Select value={paymentForm.method} onValueChange={(value) => setPaymentForm({...paymentForm, method: value})}>
                     <SelectTrigger>
                       <SelectValue placeholder={t("اختر طريقة الدفع", "Choose payment method")} />
@@ -686,28 +561,43 @@ export function Fees() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="payDate">{t("تاريخ الدفع", "Payment Date")}</Label>
+
+                {/* Date */}
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-medium">{t("تاريخ الدفع", "Payment Date")}</Label>
                   <div className="relative">
-                    <Calendar className="absolute right-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Calendar className={cn("absolute top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground", isArabic ? "right-3" : "left-3")} />
                     <Input
-                      id="payDate"
                       type="date"
                       value={paymentForm.date}
                       onChange={(e) => setPaymentForm({...paymentForm, date: e.target.value})}
-                      className="pr-10"
+                      className={cn(isArabic ? "pr-10" : "pl-10")}
                     />
                   </div>
                 </div>
               </div>
-              <div className="flex justify-end mt-6">
-                <Button 
-                  onClick={handleSavePayment} 
-                  disabled={loading}
-                  className="bg-primary hover:bg-primary/90"
-                >
-                  <Save className="h-4 w-4 ml-2" />
-                  حفظ الدفع
+
+              {/* Amount preview */}
+              {paymentForm.amount && (
+                <div className="mt-4 p-3 bg-primary/5 border border-primary/15 rounded-lg flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-primary shrink-0" />
+                  <span className="text-sm">
+                    {t("ستدفع", "You will record payment of")}{" "}
+                    <span className="font-bold text-primary stat-number">{parseFloat(paymentForm.amount || '0').toLocaleString()} {t("جنيه", "EGP")}</span>
+                  </span>
+                  {parseFloat(paymentForm.amount) > (selectedStudent.unpaid || 0) && (
+                    <div className="flex items-center gap-1 text-destructive text-xs ml-auto">
+                      <AlertTriangle className="h-3.5 w-3.5" />
+                      {t("يتجاوز المبلغ المتبقي", "Exceeds remaining balance")}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className={cn("flex justify-end mt-5", isArabic ? "justify-start" : "")}>
+                <Button onClick={handleSavePayment} disabled={loading} className="bg-primary hover:bg-primary/90 gap-2 px-6">
+                  <Save className="h-4 w-4" />
+                  {loading ? t("جاري الحفظ...", "Saving...") : t("حفظ الدفع", "Save Payment")}
                 </Button>
               </div>
             </div>
@@ -719,22 +609,17 @@ export function Fees() {
       <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
         <DialogContent className="sm:max-w-[425px]" dir={isArabic ? "rtl" : "ltr"}>
           <DialogHeader>
-            <DialogTitle className={`flex items-center gap-2 ${isArabic ? 'flex-row-reverse' : ''}`}>
+            <DialogTitle className={cn("flex items-center gap-2", isArabic ? "flex-row-reverse" : "")}>
               <Edit2 className="h-5 w-5" />
               <span>{t("تعديل إجمالي الرسوم", "Edit Total Fees")}</span>
             </DialogTitle>
             <DialogDescription>
-              {t(
-                "قم بتعديل إجمالي الرسوم للطالب. سيتم إعادة حساب جميع المبالغ تلقائياً.",
-                "Edit the student's total fees. All amounts will be automatically recalculated."
-              )}
+              {t("قم بتعديل إجمالي الرسوم للطالب. سيتم إعادة حساب جميع المبالغ تلقائياً.", "Edit the student's total fees. All amounts will be automatically recalculated.")}
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
-              <Label htmlFor="editTotalFees">
-                {t("إجمالي الرسوم (جنيه مصري)", "Total Fees (EGP)")}
-              </Label>
+              <Label htmlFor="editTotalFees">{t("إجمالي الرسوم (جنيه مصري)", "Total Fees (EGP)")}</Label>
               <Input
                 id="editTotalFees"
                 type="number"
@@ -744,18 +629,11 @@ export function Fees() {
                 value={editTotalFeesValue}
                 onChange={(e) => setEditTotalFeesValue(e.target.value)}
                 placeholder={t("أدخل إجمالي الرسوم", "Enter total fees")}
-                className="text-lg"
-                onKeyPress={(e) => {
-                  if (e.key === 'Enter') {
-                    handleSaveTotalFees();
-                  }
-                }}
+                className="text-lg font-semibold"
+                onKeyPress={(e) => { if (e.key === 'Enter') handleSaveTotalFees(); }}
               />
               <p className="text-xs text-muted-foreground">
-                {t(
-                  "سيتم إعادة حساب: الخصم، المبلغ الصافي، المبلغ المتبقي",
-                  "Will recalculate: Discount, Net Amount, Remaining Balance"
-                )}
+                {t("سيتم إعادة حساب: الخصم، المبلغ الصافي، المبلغ المتبقي", "Will recalculate: Discount, Net Amount, Remaining Balance")}
               </p>
             </div>
             {selectedStudent && (
@@ -766,18 +644,18 @@ export function Fees() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">{t("الرسوم الحالية:", "Current Fees:")}</span>
-                  <span className="font-medium">{(selectedStudent.baseFees || 0).toLocaleString()} {t("جنيه", "EGP")}</span>
+                  <span className="font-medium stat-number">{(selectedStudent.baseFees || 0).toLocaleString()} {t("جنيه", "EGP")}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">{t("الرسوم الجديدة:", "New Fees:")}</span>
-                  <span className="font-medium text-primary">
+                  <span className="font-medium text-primary stat-number">
                     {editTotalFeesValue ? parseFloat(editTotalFeesValue).toLocaleString() : '0'} {t("جنيه", "EGP")}
                   </span>
                 </div>
               </div>
             )}
           </div>
-          <DialogFooter className={isArabic ? "flex-row-reverse" : ""}>
+          <DialogFooter className={cn(isArabic ? "flex-row-reverse" : "")}>
             <Button variant="outline" onClick={() => setIsEditDialogOpen(false)} disabled={loading}>
               {t("إلغاء", "Cancel")}
             </Button>

@@ -217,3 +217,65 @@
     transform: scale(1);
   }
 }
+
+/* ── New design-system utilities ── */
+
+/* Glassmorphism card */
+.glass-card {
+  background: rgba(255,255,255,0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255,255,255,0.3);
+}
+.dark .glass-card {
+  background: rgba(30,40,60,0.7);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+/* Stat number font */
+.stat-number {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Section fade-slide in */
+.section-enter {
+  animation: sectionEnter 0.25s ease-out both;
+}
+@keyframes sectionEnter {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Sidebar item active glow */
+.nav-item-active {
+  background: hsl(var(--primary) / 0.12);
+  border-left: 3px solid hsl(var(--primary));
+  color: hsl(var(--primary));
+}
+
+/* Table row hover */
+.table-row-hover:hover {
+  background: hsl(var(--muted) / 0.6);
+  transition: background 0.15s;
+}
+
+/* Badge pill */
+.badge-pill {
+  border-radius: 9999px;
+  padding: 2px 10px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* Input focus ring */
+.input-focus:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px hsl(var(--primary) / 0.25);
+}
+
+/* Amount display */
+.amount-positive { color: hsl(var(--success)); }
+.amount-negative { color: hsl(var(--destructive)); }
+.amount-neutral  { color: hsl(var(--foreground)); }

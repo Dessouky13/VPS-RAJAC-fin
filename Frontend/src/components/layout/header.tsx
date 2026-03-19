@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
-import { Languages, Undo2, X, LogOut, Shield, User, CalendarClock } from "lucide-react";
+import { Languages, Undo2, X, Shield, User, CalendarClock } from "lucide-react";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuLabel } from "@/components/ui/dropdown-menu";
 import { MoreHorizontal } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
@@ -13,7 +13,7 @@ import { downloadMasterSheet, deleteAllData, updateInstallments, createBackup, u
 export function Header() {
   const { isArabic, setIsArabic, t } = useLanguage();
   const { lastAction, clearLastAction } = useLastAction();
-  const { user, isAdmin, logout } = useAuth();
+  const { user, isAdmin } = useAuth();
   const [yearResetLoading, setYearResetLoading] = useState(false);
 
   const handleUndo = async () => {
@@ -40,59 +40,62 @@ export function Header() {
   };
 
   return (
-    <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 fade-in" dir={isArabic ? "rtl" : "ltr"}>
-      <div className="container mx-auto px-4 h-20 flex items-center justify-between">
+    <header
+      className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60"
+      dir={isArabic ? "rtl" : "ltr"}
+    >
+      <div className="flex items-center h-14 px-4 gap-4">
 
-        {/* Logo */}
-        <div className={`flex items-center space-x-4 ${isArabic ? 'space-x-reverse' : ''}`}>
-          <div className="h-14 w-14 flex items-center justify-center scale-in bg-primary/10 rounded-lg border border-primary/20">
-            <img src={rajacLogo} alt="RAJAC" className="h-12 w-12 object-contain" />
+        {/* Logo — visible on mobile (sidebar hidden on mobile) */}
+        <div className={`flex items-center gap-2.5 lg:hidden`}>
+          <div className="h-8 w-8 flex items-center justify-center rounded-lg bg-primary/10 border border-primary/20">
+            <img src={rajacLogo} alt="RAJAC" className="h-6 w-6 object-contain" />
           </div>
-          <div className="slide-up">
-            <h1 className="text-2xl font-bold text-primary">{t("نظام المالية", "Financial System")}</h1>
-            <p className="text-sm text-muted-foreground">{t("مدارس راجاك للغات", "RAJAC Language Schools")}</p>
-          </div>
+          <span className="text-sm font-bold text-primary">{t("نظام المالية", "Financial System")}</span>
         </div>
+
+        {/* Spacer */}
+        <div className="flex-1" />
 
         {/* Last action pill */}
         {lastAction && (
-          <div className="hidden md:flex items-center gap-2 bg-muted border border-border rounded-lg px-3 py-2 max-w-xs shadow-sm">
+          <div className="hidden md:flex items-center gap-2 bg-muted border border-border rounded-lg px-3 py-1.5 max-w-xs shadow-sm">
             <div className="flex-1 min-w-0">
-              <p className="text-xs text-muted-foreground leading-none mb-0.5">{t("آخر إجراء", "Last action")}</p>
+              <p className="text-[10px] text-muted-foreground leading-none mb-0.5">{t("آخر إجراء", "Last action")}</p>
               <p className="text-xs font-medium text-foreground truncate">{lastAction.description}</p>
             </div>
-            <Button variant="outline" size="sm" className="h-7 px-2 text-xs gap-1 shrink-0" onClick={handleUndo}>
-              <Undo2 className="h-3 w-3" />{t("تراجع", "Undo")}
+            <Button variant="outline" size="sm" className="h-6 px-2 text-[10px] gap-1 shrink-0" onClick={handleUndo}>
+              <Undo2 className="h-2.5 w-2.5" />{t("تراجع", "Undo")}
             </Button>
             <button className="text-muted-foreground hover:text-foreground transition-colors shrink-0" onClick={clearLastAction} aria-label="Dismiss">
-              <X className="h-3.5 w-3.5" />
+              <X className="h-3 w-3" />
             </button>
           </div>
         )}
 
         {/* Right controls */}
-        <div className={`flex items-center space-x-3 ${isArabic ? 'space-x-reverse' : ''}`}>
-          <Button variant="outline" size="sm" onClick={() => setIsArabic(!isArabic)} className="gap-2 hover:scale-105 transition-transform">
-            <Languages className="h-4 w-4" />
-            <span className="text-sm">{isArabic ? "English" : "العربية"}</span>
+        <div className={`flex items-center gap-2`}>
+          <Button variant="outline" size="sm" onClick={() => setIsArabic(!isArabic)} className="gap-1.5 h-8 px-2.5">
+            <Languages className="h-3.5 w-3.5" />
+            <span className="text-xs hidden sm:inline">{isArabic ? "English" : "العربية"}</span>
           </Button>
 
           {/* User badge */}
           {user && (
-            <div className="hidden sm:flex items-center gap-1.5 bg-muted/60 border border-border rounded-md px-2.5 py-1.5 text-xs">
-              {user.role === 'admin' ? <Shield className="h-3.5 w-3.5 text-primary" /> : <User className="h-3.5 w-3.5 text-muted-foreground" />}
+            <div className="hidden sm:flex items-center gap-1.5 bg-muted/60 border border-border rounded-md px-2.5 py-1 text-xs">
+              {user.role === 'admin' ? <Shield className="h-3 w-3 text-primary" /> : <User className="h-3 w-3 text-muted-foreground" />}
               <span className="font-medium text-foreground">{user.name}</span>
               <span className="text-muted-foreground capitalize">({user.role})</span>
             </div>
           )}
 
-          {/* Admin dropdown — only shown to admins */}
+          {/* Admin dropdown */}
           {isAdmin && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="sm" className="hover:bg-accent/50">
+                <Button variant="ghost" size="sm" className="h-8 px-2.5 hover:bg-accent/50">
                   <MoreHorizontal className="h-4 w-4" />
-                  <span className="ml-2 text-sm">Admin</span>
+                  <span className="ml-1.5 text-xs hidden sm:inline">Admin</span>
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
@@ -143,12 +146,6 @@ export function Header() {
           )}
 
           <ThemeToggle />
-
-          {/* Logout */}
-          <Button variant="ghost" size="sm" onClick={logout} className="gap-1.5 text-muted-foreground hover:text-destructive">
-            <LogOut className="h-4 w-4" />
-            <span className="hidden sm:inline text-sm">{t("خروج", "Logout")}</span>
-          </Button>
         </div>
       </div>
     </header>
