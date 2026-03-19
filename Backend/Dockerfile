@@ -20,8 +20,8 @@ RUN mkdir -p /usr/src/app/uploads /usr/src/app/temp \
 # Switch to the non-root user
 USER appuser
 
-# Use port 8080 by default to match Cloud Run; platform will override PORT if provided
-ENV PORT 8080
+# PORT defaults to 3000; override via environment variable or docker-compose
+ENV PORT 3000
 EXPOSE ${PORT}
 
 CMD [ "node", "server.js" ]

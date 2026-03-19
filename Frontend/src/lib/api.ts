@@ -4,13 +4,10 @@
 // deployed backend URL so the site doesn't attempt to call localhost from the
 // user's browser. This fallback is intentionally explicit so you can change it.
 const BUILD_API_BASE = (import.meta.env?.VITE_API_BASE_URL as string) || '';
-const DEPLOYED_FALLBACK = 'https://rajac-finance-backend-157566300470.us-central1.run.app';
-const API_BASE = BUILD_API_BASE || DEPLOYED_FALLBACK;
+const API_BASE = BUILD_API_BASE;
 if (!BUILD_API_BASE) {
-  // Helpful debug message in browser console when a client-side build used default
-  // (so you can tell why requests are not going to localhost)
   // eslint-disable-next-line no-console
-  console.warn('[rajac] VITE_API_BASE_URL not set at build time — using fallback:', API_BASE);
+  console.warn('[rajac] VITE_API_BASE_URL not set — API calls will fail. Set this env var to your VPS backend URL.');
 }
 const API_BASE_URL = API_BASE.endsWith('/') ? API_BASE + 'api' : API_BASE + '/api';
 
@@ -40,14 +37,7 @@ interface Student {
   netFees: number;
   totalPaid: number;
   unpaid: number;
-  // Legacy fields for backward compatibility
-  id?: string;
-  fees?: number;
-  discount?: number;
-  payment1Due?: string;
-  payment2Due?: string;
-  paidAmount?: number;
-  remainingAmount?: number;
+  phoneNumber?: string;
 }
 
 interface Transaction {
@@ -55,7 +45,7 @@ interface Transaction {
   type: 'IN' | 'OUT';
   name: string;
   amount: number;
-  method: 'Cash' | 'Other';
+  method: 'Cash' | 'InstaPay' | 'Visa' | 'Check' | string;
   date: string;
   note?: string;
 }
@@ -70,19 +60,24 @@ interface OverdueStudent {
   DueDate: string;
 }
 
+// Auth token helper — reads from localStorage so it's always current
+function authHeaders(): Record<string, string> {
+  const token = localStorage.getItem("rajac_token");
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 // Helper for GET requests
 async function apiGet<T>(endpoint: string, params: Record<string, any> = {}): Promise<ApiResponse<T>> {
   try {
-  const url = new URL(API_BASE_URL + endpoint);
+    const url = new URL(API_BASE_URL + endpoint);
     Object.entries(params).forEach(([key, value]) => {
-      if (value !== undefined && value !== null) {
-        url.searchParams.append(key, String(value));
-      }
+      if (value !== undefined && value !== null) url.searchParams.append(key, String(value));
     });
     const response = await fetch(url.toString(), {
       method: 'GET',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
     });
+    if (response.status === 401) return { ok: false, data: null as T, message: 'Session expired. Please log in again.' };
     const data = await response.json();
     return { ok: data.success, ...data, data: data.students || data.student || data.data || data.analytics || data.transactions || data.installments || data.config || data.deposits };
   } catch (error) {
@@ -93,78 +88,17 @@ async function apiGet<T>(endpoint: string, params: Record<string, any> = {}): Pr
 // Helper for POST/PUT requests
 async function apiSend<T>(endpoint: string, payload: Record<string, any>, method: 'POST' | 'PUT' = 'POST'): Promise<ApiResponse<T>> {
   try {
-  const url = new URL(API_BASE_URL + endpoint);
+    const url = new URL(API_BASE_URL + endpoint);
     const response = await fetch(url.toString(), {
       method,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(payload),
     });
+    if (response.status === 401) return { ok: false, data: null as T, message: 'Session expired. Please log in again.' };
     const data = await response.json();
     return { ok: data.success, ...data, data: data.data || data.student || data.students || data.analytics || data.transactions || data.installments || data.config || data.deposits };
   } catch (error) {
     return { ok: false, data: null as T, message: error instanceof Error ? error.message : 'Unknown error' };
-  }
-}
-
-// POST API call for form submissions
-async function apiPost<T>(action: string, payload: Record<string, any>): Promise<ApiResponse<T>> {
-  try {
-    const url = API_BASE_URL;
-
-    // Include action in the JSON body as required by backend
-    const body = { action, ...payload };
-    
-    console.log('API POST Call:', url, body);
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      mode: 'cors',
-      body: JSON.stringify(body),
-    });
-
-    console.log('API POST Response Status:', response.status);
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const result = await response.json();
-    console.log('API POST Response Data:', result);
-    
-    // Backend returns: {ok: true, msg: "..."} or {ok: false, msg: "..."}
-    if (result && result.ok) {
-      return {
-        ok: true,
-        data: result.saved || result.data || result,
-        message: result.msg || result.message
-      };
-    } else {
-      return {
-        ok: false,
-        data: null as T,
-        message: (result && (result.error || result.msg || result.message)) || 'خطأ في إرسال البيانات'
-      };
-    }
-    
-  } catch (error) {
-    console.error('API POST failed:', error);
-    
-    if (error instanceof TypeError && error.message === 'Failed to fetch') {
-      return {
-        ok: false,
-        data: null as T,
-        message: 'خطأ في الاتصال: يرجى التأكد من نشر الخادم بشكل صحيح'
-      };
-    }
-    
-    return {
-      ok: false,
-      data: null as T,
-      message: `خطأ في إرسال البيانات: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`
-    };
   }
 }
 
@@ -193,12 +127,7 @@ export async function getStudentByIdentifier(identifier: string): Promise<ApiRes
     netFees,
     totalPaid,
     unpaid,
-    // legacy/backwards compatibility
-    id: s.studentId || s.Student_ID || s.id,
-    fees: baseFees,
-    discount: discountPct,
-    paidAmount: totalPaid,
-    remainingAmount: unpaid
+    phoneNumber: s.phoneNumber || s.Phone_Number || s.phone || s.mobile || '',
   };
 
   return { ok: true, data: normalized };
@@ -252,6 +181,7 @@ export async function saveInOut(data: {
   paymentMethod: string;
   notes?: string;
   processedBy?: string;
+  date?: string;
 }): Promise<ApiResponse<any>> {
   return apiSend('/finance/transaction', data, 'POST');
 }
@@ -328,7 +258,7 @@ export async function getOverdueList(): Promise<ApiResponse<OverdueStudent[]>> {
 export async function downloadMasterSheet(): Promise<ApiResponse<any>> {
   try {
     const url = API_BASE_URL + '/admin/master-sheet';
-    const res = await fetch(url, { method: 'GET' });
+    const res = await fetch(url, { method: 'GET', headers: authHeaders() });
     if (!res.ok) throw new Error('Failed to download');
     // Create blob and trigger download
     const blob = await res.blob();
@@ -354,16 +284,153 @@ export async function updateInstallments(data: Array<{ number: number; date: str
   return apiSend('/admin/installments', { installments: data }, 'POST');
 }
 
-export async function deleteOldGradeSheets(): Promise<ApiResponse<any>> {
-  return apiSend('/admin/delete-old-sheets', {}, 'POST');
-}
-
 export async function createBackup(): Promise<ApiResponse<any>> {
   return apiSend('/admin/backup', {}, 'POST');
 }
 
 export async function undoLastAction(): Promise<ApiResponse<any>> {
   return apiSend('/admin/undo', {}, 'POST');
+}
+
+export async function listBackups(): Promise<ApiResponse<any[]>> {
+  return apiGet('/admin/backups');
+}
+
+export async function refreshToken(): Promise<string | null> {
+  try {
+    const token = localStorage.getItem('rajac_token');
+    if (!token) return null;
+    const res = await fetch(API_BASE_URL + '/auth/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.token || null;
+  } catch {
+    return null;
+  }
+}
+
+// Auth
+export async function loginUser(username: string, password: string): Promise<any> {
+  try {
+    const res = await fetch(API_BASE_URL + '/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
+    return await res.json();
+  } catch (error) {
+    return { success: false, message: error instanceof Error ? error.message : 'Network error' };
+  }
+}
+
+export async function getUsers(): Promise<ApiResponse<any[]>> {
+  return apiGet('/auth/users');
+}
+
+export async function addUser(data: { username: string; password: string; role: string; name: string }): Promise<ApiResponse<any>> {
+  return apiSend('/auth/users', data, 'POST');
+}
+
+export async function deleteUser(username: string): Promise<ApiResponse<any>> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/auth/users/${encodeURIComponent(username)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() }
+    });
+    return await res.json();
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : 'Error' };
+  }
+}
+
+export async function changePassword(currentPassword: string, newPassword: string): Promise<ApiResponse<any>> {
+  return apiSend('/auth/change-password', { currentPassword, newPassword }, 'POST');
+}
+
+// Update single student
+export async function updateStudentById(studentId: string, updates: {
+  name?: string; year?: string; phoneNumber?: string;
+  numberOfSubjects?: number; totalFees?: number; discountPercent?: number;
+}): Promise<ApiResponse<any>> {
+  return apiSend(`/students/${studentId}`, updates, 'PUT');
+}
+
+// Delete student
+export async function deleteStudentById(studentId: string): Promise<ApiResponse<any>> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/students/${encodeURIComponent(studentId)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() }
+    });
+    const data = await res.json();
+    return { ok: data.success, ...data };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : 'Error' };
+  }
+}
+
+// Bulk update students via Excel
+export async function uploadStudentsUpdateFile(file: File): Promise<ApiResponse<any>> {
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await fetch(API_BASE_URL + '/students/upload-update', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: formData
+    });
+    const data = await res.json();
+    return { ok: data.success, ...data };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : 'Upload failed' };
+  }
+}
+
+// New Academic Year reset
+export async function newAcademicYear(academicYear: string, keepStudents = true): Promise<ApiResponse<any>> {
+  return apiSend('/admin/new-academic-year', { academicYear, keepStudents }, 'POST');
+}
+
+// Add single student
+export async function addStudent(data: {
+  name: string;
+  year: string;
+  numberOfSubjects?: number;
+  totalFees: number;
+  phoneNumber?: string;
+  discountPercent?: number;
+  enrollmentDate?: string;
+  processedBy?: string;
+}): Promise<ApiResponse<any>> {
+  return apiSend('/students', data, 'POST');
+}
+
+// Search students by name or student ID
+export async function searchStudents(query: string): Promise<ApiResponse<any[]>> {
+  const res = await apiGet(`/students/search/${encodeURIComponent(query)}`);
+  // Backend returns a single student object; normalise to array for the UI
+  if (res.ok) {
+    const student = (res as any).student ?? (res as any).data;
+    return { ...res, data: student ? [student] : [] };
+  }
+  return { ...res, data: [] };
+}
+
+// Upload students via Excel file
+export async function uploadStudentsFile(file: File): Promise<ApiResponse<any>> {
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    const url = API_BASE_URL + '/students/upload';
+    const response = await fetch(url, { method: 'POST', headers: authHeaders(), body: formData });
+    const data = await response.json();
+    return { ok: data.success, ...data };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : 'Upload failed' };
+  }
 }
 
 // Teachers API
@@ -396,7 +463,7 @@ export async function deleteTeacher(teacherId: string): Promise<ApiResponse<any>
     const url = `${API_BASE_URL}/teachers/${teacherId}`;
     const response = await fetch(url, {
       method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
     });
     const data = await response.json();
     return { ok: data.success, ...data };
@@ -414,18 +481,3 @@ export async function updateTeacher(teacherId: string, updates: {
   return apiSend(`/teachers/${teacherId}`, updates, 'PUT');
 }
 
-interface DueReportItem {
-  StudentID: string;
-  FullName: string;
-  paymentNo: number;
-  dueAmount: number;
-  paid: number;
-  balance: number;
-  dueDate: string;
-  overdue: boolean;
-}
-
-// Implement as needed based on backend endpoint
-// export async function getDueReport(year: number, quarter: number): Promise<ApiResponse<DueReportItem[]>> {
-//   return apiGet<DueReportItem[]>('/due-report', { year, quarter });
-// }

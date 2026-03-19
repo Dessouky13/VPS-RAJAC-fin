@@ -24,7 +24,8 @@ import {
   Calendar,
   Percent,
   Save,
-  Edit2
+  Edit2,
+  Phone
 } from "lucide-react";
 
 interface Student {
@@ -36,6 +37,9 @@ interface Student {
   netFees: number;
   totalPaid: number;
   unpaid: number;
+  phoneNumber?: string;
+  Phone_Number?: string;
+  phone?: string;
   // Legacy fields for backward compatibility
   id?: string;
   fees?: number;
@@ -597,6 +601,21 @@ export function Fees() {
                   {(selectedStudent.unpaid || 0).toLocaleString()} {t("جنيه", "EGP")}
                 </p>
               </div>
+              {(selectedStudent.phoneNumber || selectedStudent.Phone_Number || selectedStudent.phone) && (
+                <div className="text-center p-4 bg-background/50 rounded-lg flex flex-col items-center gap-1">
+                  <p className="text-sm text-muted-foreground flex items-center gap-1">
+                    <Phone className="h-3 w-3" /> {t("واتساب / هاتف", "WhatsApp / Phone")}
+                  </p>
+                  <a
+                    href={`https://wa.me/${(selectedStudent.phoneNumber || selectedStudent.Phone_Number || selectedStudent.phone || '').replace(/\D/g, '')}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-base font-semibold text-primary hover:underline font-mono"
+                  >
+                    {selectedStudent.phoneNumber || selectedStudent.Phone_Number || selectedStudent.phone}
+                  </a>
+                </div>
+              )}
             </div>
 
             {/* Payment Form */}

@@ -1,130 +1,92 @@
-const googleSheets = require('./googleSheets');
+'use strict';
+const crypto  = require('crypto');
+const db      = require('./db');
+const financeService = require('./financeService');
 
 class TeachersService {
-  /**
-   * Get all teachers from the Teachers sheet
-   */
-  async getAllTeachers() {
-    try {
-      const teachers = await googleSheets.getTeachers();
-      return teachers;
-    } catch (error) {
-      console.error('Error fetching teachers:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Add a new teacher
-   */
-  async addTeacher(teacherData) {
-    try {
-      const teacher = {
-        id: this.generateId(),
-        name: teacherData.name,
-        subject: teacherData.subject,
-        numberOfClasses: teacherData.numberOfClasses,
-        totalAmount: teacherData.totalAmount,
-        totalPaid: 0,
-        remainingBalance: teacherData.totalAmount,
-        createdAt: new Date().toISOString()
-      };
-
-      await googleSheets.addTeacher(teacher);
-      return { success: true, teacher };
-    } catch (error) {
-      console.error('Error adding teacher:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Pay a teacher
-   */
-  async payTeacher(paymentData) {
-    try {
-      // Find teacher by name
-      const teachers = await this.getAllTeachers();
-      const teacher = teachers.find(t => t.name === paymentData.teacherName);
-      if (!teacher) {
-        throw new Error('Teacher not found');
-      }
-
-      // Update teacher's totalPaid and remainingBalance
-      const paymentAmount = Number(paymentData.amount);
-      const newTotalPaid = teacher.totalPaid + paymentAmount;
-      const newRemainingBalance = teacher.totalAmount - newTotalPaid;
-
-      await googleSheets.updateTeacherPayment(teacher.id, newTotalPaid, newRemainingBalance);
-
-      // Add to transactions
-      const transaction = {
-        type: 'Teacher Payment',
-        teacherName: teacher.name,
-        amount: paymentAmount,
-        method: paymentData.method,
-        date: new Date().toISOString(),
-        description: `Payment to ${teacher.name} for ${teacher.subject}`
-      };
-
-      await googleSheets.addTransaction(transaction);
-
-      return { success: true, teacher: { ...teacher, totalPaid: newTotalPaid, remainingBalance: newRemainingBalance } };
-    } catch (error) {
-      console.error('Error paying teacher:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Delete a teacher by ID
-   */
-  async deleteTeacher(teacherId) {
-    try {
-      const result = await googleSheets.deleteTeacher(teacherId);
-      return result;
-    } catch (error) {
-      console.error('Error deleting teacher:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Update teacher information
-   */
-  async updateTeacher(teacherId, updates) {
-    try {
-      const teachers = await this.getAllTeachers();
-      const teacher = teachers.find(t => t.id === teacherId);
-      if (!teacher) {
-        throw new Error('Teacher not found');
-      }
-
-      // Calculate new remaining balance if totalAmount changed
-      const newTotalAmount = updates.totalAmount !== undefined ? updates.totalAmount : teacher.totalAmount;
-      const newRemainingBalance = newTotalAmount - teacher.totalPaid;
-
-      const updatedTeacher = {
-        id: teacher.id,
-        name: updates.name !== undefined ? updates.name : teacher.name,
-        subject: updates.subject !== undefined ? updates.subject : teacher.subject,
-        numberOfClasses: updates.numberOfClasses !== undefined ? updates.numberOfClasses : teacher.numberOfClasses,
-        totalAmount: newTotalAmount,
-        totalPaid: teacher.totalPaid,
-        remainingBalance: newRemainingBalance,
-        createdAt: teacher.createdAt
-      };
-
-      await googleSheets.updateTeacher(teacherId, updatedTeacher);
-      return { success: true, teacher: updatedTeacher };
-    } catch (error) {
-      console.error('Error updating teacher:', error);
-      throw error;
-    }
-  }
-
   generateId() {
-    return 'T' + Date.now() + Math.random().toString(36).substr(2, 9);
+    return `T${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
+  }
+
+  async getAllTeachers() {
+    const { rows } = await db.query('SELECT * FROM teachers ORDER BY name');
+    return rows.map(r => ({
+      id:               r.id,
+      name:             r.name,
+      subject:          r.subject,
+      numberOfClasses:  r.number_of_classes,
+      totalAmount:      parseFloat(r.total_amount),
+      totalPaid:        parseFloat(r.total_paid),
+      remainingBalance: parseFloat(r.remaining_balance),
+      createdAt:        r.created_at,
+    }));
+  }
+
+  async addTeacher({ name, subject, numberOfClasses, totalAmount }) {
+    const id = this.generateId();
+    const { rows } = await db.query(
+      `INSERT INTO teachers (id, name, subject, number_of_classes, total_amount, total_paid, remaining_balance)
+       VALUES ($1,$2,$3,$4,$5,0,$5) RETURNING *`,
+      [id, name, subject, parseInt(numberOfClasses) || 0, parseFloat(totalAmount) || 0]
+    );
+    const t = rows[0];
+    return { success: true, teacher: { id: t.id, name: t.name, subject: t.subject,
+      numberOfClasses: t.number_of_classes, totalAmount: parseFloat(t.total_amount),
+      totalPaid: parseFloat(t.total_paid), remainingBalance: parseFloat(t.remaining_balance) } };
+  }
+
+  async payTeacher({ teacherName, amount, method }) {
+    const { rows } = await db.query(
+      'SELECT * FROM teachers WHERE name = $1', [teacherName]
+    );
+    if (!rows.length) throw new Error('Teacher not found');
+    const t              = rows[0];
+    const paymentAmount  = parseFloat(amount) || 0;
+    const newTotalPaid   = parseFloat(t.total_paid) + paymentAmount;
+    const newRemaining   = parseFloat(t.total_amount) - newTotalPaid;
+
+    await db.query(
+      'UPDATE teachers SET total_paid = $1, remaining_balance = $2 WHERE id = $3',
+      [newTotalPaid, newRemaining, t.id]
+    );
+
+    // Record as expense in ledger
+    await financeService.recordTransaction(
+      'out', paymentAmount, 'Teacher Salary', teacherName,
+      method || 'Cash', `Payment to ${teacherName} for ${t.subject}`, 'Finance Team'
+    );
+
+    return { success: true, teacher: { ...t, totalPaid: newTotalPaid, remainingBalance: newRemaining } };
+  }
+
+  async updateTeacher(teacherId, updates) {
+    const { rows } = await db.query('SELECT * FROM teachers WHERE id = $1', [teacherId]);
+    if (!rows.length) throw new Error('Teacher not found');
+    const t = rows[0];
+
+    const name        = updates.name             !== undefined ? updates.name             : t.name;
+    const subject     = updates.subject          !== undefined ? updates.subject          : t.subject;
+    const classes     = updates.numberOfClasses  !== undefined ? updates.numberOfClasses  : t.number_of_classes;
+    const totalAmount = updates.totalAmount      !== undefined ? parseFloat(updates.totalAmount) : parseFloat(t.total_amount);
+    const remaining   = totalAmount - parseFloat(t.total_paid);
+
+    const { rows: updated } = await db.query(
+      `UPDATE teachers SET name=$1, subject=$2, number_of_classes=$3, total_amount=$4, remaining_balance=$5
+       WHERE id=$6 RETURNING *`,
+      [name, subject, parseInt(classes) || 0, totalAmount, remaining, teacherId]
+    );
+    const u = updated[0];
+    return { success: true, teacher: { id: u.id, name: u.name, subject: u.subject,
+      numberOfClasses: u.number_of_classes, totalAmount: parseFloat(u.total_amount),
+      totalPaid: parseFloat(u.total_paid), remainingBalance: parseFloat(u.remaining_balance) } };
+  }
+
+  async deleteTeacher(teacherId) {
+    const { rows } = await db.query(
+      'DELETE FROM teachers WHERE id = $1 RETURNING id', [teacherId]
+    );
+    if (!rows.length) throw new Error('Teacher not found');
+    return { success: true };
   }
 }
 

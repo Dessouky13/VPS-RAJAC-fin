@@ -6,12 +6,17 @@ import { DueReport } from "@/components/sections/due-report";
 import { Transactions } from "@/components/sections/transactions";
 import { Balances } from "@/components/sections/balances";
 import { Teachers } from "@/components/sections/teachers";
+import { Students } from "@/components/sections/students";
+import { useAuth } from "@/contexts/AuthContext";
 
 const Index = () => {
-  const [activeSection, setActiveSection] = useState("fees");
+  const { isAdmin } = useAuth();
+  const [activeSection, setActiveSection] = useState(() => isAdmin ? "fees" : "students");
 
   const renderSection = () => {
     switch (activeSection) {
+      case "students":
+        return <Students />;
       case "fees":
         return <Fees />;
       case "due-report":

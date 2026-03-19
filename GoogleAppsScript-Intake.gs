@@ -15,8 +15,8 @@
 // ===== CONFIGURATION =====
 const CONFIG = {
   // Replace with your Master Spreadsheet ID
-  MASTER_SHEET_ID: 'YOUR_SPREADSHEET_ID_HERE',
-  MASTER_SHEET_NAME: 'Master_Students',
+  MASTER_SHEET_ID: '1d4E-yvYev7GW7PL-VV1X41ZGS8oVmRwt5MnnIOjKRAE',
+  MASTER_SHEET_NAME: '',
 
   // Email notification settings
   SEND_EMAIL_NOTIFICATIONS: true,

@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { saveInOut, getRecentTransactions } from "@/lib/api";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useLastAction } from "@/contexts/LastActionContext";
 import { 
   TrendingUp, 
   TrendingDown, 
@@ -31,6 +32,7 @@ interface Transaction {
 
 export function Transactions() {
   const { isArabic, t } = useLanguage();
+  const { setLastAction } = useLastAction();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
@@ -91,10 +93,15 @@ export function Transactions() {
         payerReceiverName: form.name,
         paymentMethod: form.method,
         notes: form.note || undefined,
-        processedBy: 'Frontend User'
+        processedBy: 'Frontend User',
+        date: form.date
       });
 
       if (response.ok) {
+        const actionLabel = form.type === 'IN'
+          ? t(`إيراد: ${form.name} — ${form.amount} جنيه (${form.date})`, `Revenue: ${form.name} — ${form.amount} EGP (${form.date})`)
+          : t(`مصروف: ${form.name} — ${form.amount} جنيه (${form.date})`, `Expense: ${form.name} — ${form.amount} EGP (${form.date})`);
+        setLastAction(actionLabel);
         toast({
           title: t('تم حفظ المعاملة بنجاح', 'Transaction saved'),
           description: t(

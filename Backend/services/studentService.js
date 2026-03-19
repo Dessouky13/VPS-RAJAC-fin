@@ -1,708 +1,351 @@
-const XLSX = require('xlsx');
-const { v4: uuidv4 } = require('uuid');
-const moment = require('moment');
-const googleSheets = require('./googleSheets');
-const googleDrive = require('./googleDrive');
-const financeService = require('./financeService');
-const paymentDueService = require('./paymentDueService');
+'use strict';
+const XLSX    = require('xlsx');
+const crypto  = require('crypto');
+const moment  = require('moment');
+const db      = require('./db');
+const fs      = require('fs');
 
 class StudentService {
-  /**
-   * Import an array of student objects (MVP JSON paste import).
-   * Each student may include: name, year, numberOfSubjects, totalFees, phoneNumber, enrollmentDate, discountPercent, totalPaid, status
-   */
-  async importStudentsArray(studentsArray) {
-    if (!Array.isArray(studentsArray)) throw new Error('studentsArray must be an array');
-
-    const processed = studentsArray.map(s => {
-      const totalFees = Number(s.totalFees || s.Total_Fees || s.fees || s.price || 0) || 0;
-      const discountPercent = Number(s.discountPercent || s.Discount_Percent || s.discount || 0) || 0;
-      const discountAmount = Number(s.discountAmount || Math.round(totalFees * discountPercent / 100)) || 0;
-      const netAmount = Number(s.netAmount || Math.round(totalFees - discountAmount)) || 0;
-      const totalPaid = Number(s.totalPaid || s.Total_Paid || s.paid || 0) || 0;
-      const remainingBalance = Number(s.remainingBalance || s.Remaining_Balance || Math.round(netAmount - totalPaid)) || 0;
-
-      return {
-        studentId: s.studentId || this.generateStudentId(),
-        name: s.name || s.Name || '',
-        year: s.year || s.Year || '',
-        numberOfSubjects: s.numberOfSubjects || s.Number_of_Subjects || s.subjects || 0,
-        totalFees,
-        phoneNumber: this.formatPhoneNumber(s.phoneNumber || s.Phone_Number || s.phone || ''),
-        enrollmentDate: s.enrollmentDate || s.Enrollment_Date || moment().format('YYYY-MM-DD'),
-        discountPercent,
-        discountAmount,
-        netAmount,
-        totalPaid,
-        remainingBalance,
-        status: s.status || s.Status || (remainingBalance <= 0 ? 'Paid' : 'Active')
-      };
-    });
-
-    // reuse existing saver which creates master sheet rows and per-grade sheets
-    await this.saveStudentsToSheets(processed);
-    return { success: true, imported: processed.length };
-  }
-  async processUploadedFile(filePath, fileName) {
-    try {
-      const students = this.extractStudentData(filePath);
-      // Accept flexible column names
-      const processedStudents = students.map(student => ({
-        studentId: this.generateStudentId(),
-        name: student.Name || student["Student Name"] || student["Full Name"] || student["name"] || '',
-        year: student.Year || student.Grade || student.Class || student.Level || '',
-        numberOfSubjects: student["Number_of_Subjects"] || student["Number of Subjects"] || student.Subjects || student["Subject Count"] || 0,
-        totalFees: parseFloat(student["Total_Fees"] || student["TOTAL Fees"] || student["Total Fees"] || student.Fees || student.Amount || student["Course Fees"] || student.Tuition || 0),
-        phoneNumber: this.formatPhoneNumber(student["Phone_Number"] || student["Phone Number"] || student.Phone || student.Mobile || student["Contact Number"] || ''),
-        enrollmentDate: moment().format('YYYY-MM-DD'),
-        discountPercent: 0,
-        discountAmount: 0,
-        netAmount: parseFloat(student["Total_Fees"] || student["TOTAL Fees"] || student["Total Fees"] || student.Fees || student.Amount || student["Course Fees"] || student.Tuition || 0),
-        totalPaid: 0,
-        remainingBalance: parseFloat(student["Total_Fees"] || student["TOTAL Fees"] || student["Total Fees"] || student.Fees || student.Amount || student["Course Fees"] || student.Tuition || 0),
-        status: 'Active'
-      }));
-      await this.saveStudentsToSheets(processedStudents);
-      const uploadedFile = await googleDrive.uploadFile(filePath, fileName);
-      await googleDrive.archiveFile(uploadedFile.id);
-      return {
-        success: true,
-        studentsProcessed: processedStudents.length,
-        students: processedStudents
-      };
-    } catch (error) {
-      console.error('Error processing file:', error);
-      throw error;
-    }
-  }
-
-  extractStudentData(filePath) {
-    const workbook = XLSX.readFile(filePath);
-    const sheetName = workbook.SheetNames[0];
-    const worksheet = workbook.Sheets[sheetName];
-    
-    const data = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
-    return data;
-  }
-
+  // ── ID generation (S-6) ──────────────────────────────────────────────────
   generateStudentId() {
-    const year = moment().format('YY');
-    const random = Math.floor(1000 + Math.random() * 9000);
-    return `STU${year}${random}`;
-  }
-
-  formatPhoneNumber(phone) {
-    let cleaned = phone.toString().replace(/\D/g, '');
-    
-    if (cleaned.startsWith('20')) {
-      return cleaned;
-    } else if (cleaned.startsWith('0')) {
-      return '20' + cleaned.substring(1);
-    } else if (cleaned.length === 10) {
-      return '20' + cleaned;
-    }
-    
-    return cleaned;
-  }
-
-  async saveStudentsToSheets(students) {
-    // Ensure numeric financial fields are computed consistently before writing
-    const masterRows = students.map(s => {
-      const totalFees = Number(s.totalFees || 0) || 0;
-      const discountPercent = Number(s.discountPercent || 0) || 0;
-      const discountAmount = Number(s.discountAmount || (totalFees * discountPercent / 100)) || 0;
-      const netAmount = Number(s.netAmount || Math.round(totalFees - discountAmount)) || 0;
-      const totalPaid = Number(s.totalPaid || 0) || 0;
-      const remainingBalance = Number(s.remainingBalance || Math.round(netAmount - totalPaid)) || 0;
-
-      return [
-        s.studentId,
-        s.name,
-        s.year,
-        s.numberOfSubjects,
-        totalFees,
-        discountPercent,
-        discountAmount,
-        netAmount,
-        totalPaid,
-        remainingBalance,
-        s.phoneNumber,
-        s.enrollmentDate,
-        remainingBalance <= 0 ? 'Paid' : s.status || 'Active',
-        ''
-      ];
-    });
-
-    console.log('DEBUG: About to append to Master_Students with rows:', JSON.stringify(masterRows, null, 2));
-    await googleSheets.appendRows('Master_Students', masterRows);
-
-    const studentsByYear = students.reduce((acc, student) => {
-      const yearRaw = student.year;
-      const year = yearRaw && String(yearRaw).trim() ? String(yearRaw).trim() : 'Unknown';
-      if (!acc[year]) acc[year] = [];
-      acc[year].push(student);
-      return acc;
-    }, {});
-
-    for (const [year, yearStudents] of Object.entries(studentsByYear)) {
-      // sanitize year to ensure valid sheet name (no empty sheet like 'Grade_')
-      // Normalize year to a predictable sheet name. Prefer numeric grade if present (e.g., 'Grade 5' -> 'Grade_5').
-      let raw = String(year || '').trim();
-      // try to extract numeric grade like 1..12
-      const numMatch = raw.match(/(\d{1,3})/);
-      let safeYear;
-      if (numMatch) {
-        safeYear = numMatch[1];
-      } else {
-        // fallback: replace spaces with underscore and remove unsafe chars
-        safeYear = raw.replace(/\s+/g, '_').replace(/[^0-9A-Za-z\-_]/g, '');
-        if (!safeYear) safeYear = 'Unknown';
-      }
-      const sheetName = `Grade_${safeYear}`;
-      const yearRows = yearStudents.map(s => [
-        s.studentId,
-        s.name,
-        s.numberOfSubjects,
-        s.totalFees,
-        s.netAmount,
-        s.totalPaid,
-        s.remainingBalance,
-        s.phoneNumber,
-        s.enrollmentDate,
-        s.status
-      ]);
-
-      try {
-        const existingData = await googleSheets.getSheetData(sheetName);
-        if (existingData.length === 0) {
-          const headers = [
-            'Student_ID', 'Name', 'Number_of_Subjects', 'Total_Fees',
-            'Net_Amount', 'Total_Paid', 'Remaining_Balance', 'Phone_Number',
-            'Enrollment_Date', 'Status'
-          ];
-          await googleSheets.updateSheetHeaders(sheetName, headers);
-        }
-        await googleSheets.appendRows(sheetName, yearRows);
-        console.log(`DEBUG: Appended ${yearRows.length} rows to ${sheetName}`, JSON.stringify(yearRows, null, 2));
-      } catch (error) {
-        console.error(`Error saving to ${sheetName}:`, error);
-      }
-    }
-
-    // After saving/importing students, refresh overdue checks so Overdue_Payments is up-to-date
-    try {
-      await paymentDueService.checkOverduePayments();
-    } catch (err) {
-      console.error('Warning: failed to run overdue check after saving students:', err && err.message ? err.message : err);
-    }
-    // Sync per-grade sheets from Master_Students
-    try {
-      await this.syncGradeSheetsFromMaster();
-    } catch (err) {
-      console.error('Warning: failed to sync grade sheets after saving students:', err && err.message ? err.message : err);
-    }
-  }
-
-  async syncGradeSheetsFromMaster() {
-    try {
-      const studentsData = await googleSheets.getSheetData('Master_Students');
-      if (studentsData.length <= 1) return { synced: 0 };
-
-      const headers = studentsData[0];
-      const rows = studentsData.slice(1).map(row => {
-        const obj = {};
-        headers.forEach((h, i) => { obj[h] = row[i] || ''; });
-        return obj;
-      });
-
-      // Build overdue map from existing Overdue_Payments sheet
-      const overdueList = await paymentDueService.getOverdueStudents();
-      const overdueMap = {};
-      overdueList.forEach(s => {
-        overdueMap[s.Student_ID || s.studentId] = {
-          daysOverdue: s.Days_Overdue || s.daysOverdue || s.daysOverdue || s.daysOverdue === 0 ? s.Days_Overdue || s.daysOverdue : '',
-          dueDate: s.Due_Date || s.dueDate || s.dueDateString || s.dueDate || ''
-        };
-      });
-
-      // Also get upcoming due dates to compute next due for non-overdue students
-      const upcoming = await paymentDueService.getUpcomingDueDates();
-      const today = require('moment')();
-
-      const byGrade = {};
-
-      for (const s of rows) {
-        const yearRaw = s.Year || s.year || 'Unknown';
-        let raw = String(yearRaw || '').trim();
-        const numMatch = raw.match(/(\d{1,3})/);
-        let safeYear;
-        if (numMatch) {
-          safeYear = numMatch[1];
-        } else {
-          safeYear = raw.replace(/\s+/g, '_').replace(/[^0-9A-Za-z\-_]/g, '');
-          if (!safeYear) safeYear = 'Unknown';
-        }
-        const sheetName = `Grade_${safeYear}`;
-
-        const studentId = s.Student_ID || s.studentId || '';
-        const name = s.Name || s.name || '';
-        const net = parseFloat(s.Net_Amount || s.netAmount || 0) || 0;
-        const paid = parseFloat(s.Total_Paid || s.totalPaid || 0) || 0;
-        const remaining = parseFloat(s.Remaining_Balance || s.remainingBalance || 0) || 0;
-        const phone = s.Phone_Number || s.phoneNumber || '';
-        const enroll = s.Enrollment_Date || s.enrollmentDate || '';
-
-        let daysOverdue = '';
-        let dueDate = '';
-        if (overdueMap[studentId]) {
-          daysOverdue = overdueMap[studentId].daysOverdue || '';
-          dueDate = overdueMap[studentId].dueDate || '';
-        } else {
-          // find next upcoming installment date
-          const next = upcoming.find(u => new Date(u.date) > new Date());
-          if (next) {
-            dueDate = next.date;
-            daysOverdue = require('moment')(next.date).diff(today, 'days');
-          }
-        }
-
-        const outRow = [
-          studentId,
-          name,
-          net,
-          paid,
-          remaining,
-          phone,
-          enroll,
-          daysOverdue,
-          dueDate
-        ];
-
-        if (!byGrade[sheetName]) byGrade[sheetName] = [];
-        byGrade[sheetName].push(outRow);
-      }
-
-      // Write to each grade sheet: ensure headers, clear existing data, then append
-      const headersOut = ['Student_ID','Name','Net_Amount','Total_Paid','Remaining_Balance','Phone_Number','Enrollment_Date','Days_Overdue','Due_Date'];
-
-      for (const [sheet, rowsArr] of Object.entries(byGrade)) {
-        try {
-          await googleSheets.updateSheetHeaders(sheet, headersOut);
-          await googleSheets.clearSheet(sheet);
-          if (rowsArr.length > 0) await googleSheets.appendRows(sheet, rowsArr);
-        } catch (err) {
-          console.error(`Error writing to grade sheet ${sheet}:`, err && err.message ? err.message : err);
-        }
-      }
-
-      return { synced: Object.keys(byGrade).length };
-    } catch (error) {
-      console.error('Error syncing grade sheets from master:', error);
-      throw error;
-    }
-  }
-
-  async getStudentInfo(identifier) {
-    const student = await googleSheets.findStudentByIdOrName(identifier);
-    
-    if (!student) {
-      return null;
-    }
-
-    return {
-      studentId: student.Student_ID,
-      name: student.Name,
-      year: student.Year,
-      numberOfSubjects: student.Number_of_Subjects,
-      totalFees: parseFloat(student.Total_Fees || 0),
-      discountPercent: parseFloat(student.Discount_Percent || 0),
-      discountAmount: parseFloat(student.Discount_Amount || 0),
-      netAmount: parseFloat(student.Net_Amount || 0),
-      totalPaid: parseFloat(student.Total_Paid || 0),
-      remainingBalance: parseFloat(student.Remaining_Balance || 0),
-      phoneNumber: student.Phone_Number,
-      enrollmentDate: student.Enrollment_Date,
-      status: student.Status,
-      lastPaymentDate: student.Last_Payment_Date,
-      rowIndex: student.rowIndex
-    };
-  }
-
-  async applyDiscount(studentId, discountPercent) {
-    const student = await this.getStudentInfo(studentId);
-    if (!student) throw new Error('Student not found');
-
-    const discountAmount = (student.totalFees * discountPercent) / 100;
-    const netAmount = student.totalFees - discountAmount;
-    const remainingBalance = netAmount - student.totalPaid;
-
-    const updatedRow = [
-      student.studentId,
-      student.name,
-      student.year,
-      student.numberOfSubjects,
-      student.totalFees,
-      discountPercent,
-      discountAmount,
-      netAmount,
-      student.totalPaid,
-      remainingBalance,
-      student.phoneNumber,
-      student.enrollmentDate,
-      student.status,
-      student.lastPaymentDate
-    ];
-
-    await googleSheets.updateRow('Master_Students', student.rowIndex, updatedRow);
-
-    return {
-      studentId: student.studentId,
-      name: student.name,
-      totalFees: student.totalFees,
-      discountPercent,
-      discountAmount,
-      netAmount,
-      totalPaid: student.totalPaid,
-      remainingBalance
-    };
-  }
-
-  async recordPayment(studentId, amountPaid, paymentMethod, discountPercent = null, processedBy = 'System') {
-    // Create automatic backup before processing payment
-    try {
-      await googleSheets.createBackup();
-      console.log('[recordPayment] Backup created successfully');
-    } catch (backupError) {
-      console.error('[recordPayment] Warning: Failed to create backup:', backupError.message);
-      // Continue with payment even if backup fails
-    }
-
-    let student = await this.getStudentInfo(studentId);
-    if (!student) throw new Error('Student not found');
-
-    if (discountPercent !== null && discountPercent !== student.discountPercent) {
-      student = await this.applyDiscount(studentId, discountPercent);
-      student = await this.getStudentInfo(studentId);
-    }
-
-    const newTotalPaid = student.totalPaid + amountPaid;
-    const newRemainingBalance = student.netAmount - newTotalPaid;
-    const paymentDate = moment().format('YYYY-MM-DD HH:mm:ss');
-
-    const config = await googleSheets.getConfig();
-    const numberOfInstallments = parseInt(config.Number_of_Installments || 3);
-    const installmentAmount = student.netAmount / numberOfInstallments;
-    const installmentNumber = Math.ceil(newTotalPaid / installmentAmount);
-
-    const paymentRow = [
-      this.generatePaymentId(),
-      student.studentId,
-      student.name,
-      paymentDate,
-      amountPaid,
-      paymentMethod,
-      student.discountAmount,
-      student.netAmount,
-      newRemainingBalance,
-      installmentNumber,
-      processedBy,
-      ''
-    ];
-
-    await googleSheets.appendRows('Payments_Log', [paymentRow]);
-
-    const updatedStudentRow = [
-      student.studentId,
-      student.name,
-      student.year,
-      student.numberOfSubjects,
-      student.totalFees,
-      student.discountPercent,
-      student.discountAmount,
-      student.netAmount,
-      newTotalPaid,
-      newRemainingBalance,
-      student.phoneNumber,
-      student.enrollmentDate,
-      newRemainingBalance <= 0 ? 'Paid' : 'Active',
-      paymentDate
-    ];
-
-    await googleSheets.updateRow('Master_Students', student.rowIndex, updatedStudentRow);
-
-    // If the payment method is not cash, record it as a bank deposit as well
-    try {
-      if (String(paymentMethod || '').toLowerCase() !== 'cash') {
-        // Use the paymentMethod as a bank descriptor when no explicit bank name is provided
-        const bankName = String(paymentMethod || 'Unknown');
-        await financeService.recordBankDeposit(amountPaid, bankName, processedBy, `Auto: student payment ${student.studentId}`);
-      }
-    } catch (err) {
-      // Log but don't fail the payment flow if deposit recording fails
-      console.error('Warning: failed to record bank deposit for non-cash payment:', err && err.message ? err.message : err);
-    }
-
-    // After recording payment, refresh overdue checks so any resolved overdue entries are removed
-    try {
-      await paymentDueService.checkOverduePayments();
-    } catch (err) {
-      console.error('Warning: failed to run overdue check after recording payment:', err && err.message ? err.message : err);
-    }
-    // Update Analytics sheet after payment
-    try {
-      const summary = await financeService.getFinancialSummary();
-      const overdueStudents = await paymentDueService.getOverdueStudents();
-      await googleSheets.writeAnalytics(summary, overdueStudents.length);
-      // Sync grade sheets so payments reflect in per-grade sheets
-      await this.syncGradeSheetsFromMaster();
-    } catch (err) {
-      console.error('Warning: failed to update analytics after payment:', err && err.message ? err.message : err);
-    }
-    return {
-      success: true,
-      payment: {
-        studentId: student.studentId,
-        studentName: student.name,
-        amountPaid,
-        paymentMethod,
-        totalPaid: newTotalPaid,
-        remainingBalance: newRemainingBalance,
-        installmentNumber,
-        paymentDate
-      }
-    };
+    const year = new Date().getFullYear().toString().slice(-2);
+    return `STU${year}${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
   }
 
   generatePaymentId() {
-    const date = moment().format('YYYYMMDD');
-    const random = Math.floor(100 + Math.random() * 900);
-    return `PAY${date}${random}`;
+    return `PAY${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
   }
 
-  async getAllStudents() {
-    const data = await googleSheets.getSheetData('Master_Students');
-    if (data.length <= 1) return [];
-
-    const headers = data[0];
-    const students = data.slice(1).map(row => {
-      const student = {};
-      headers.forEach((header, index) => {
-        student[header] = row[index] || '';
-      });
-      return student;
-    });
-
-    return students;
+  formatPhoneNumber(phone) {
+    const cleaned = String(phone || '').replace(/\D/g, '');
+    if (cleaned.startsWith('20'))  return cleaned;
+    if (cleaned.startsWith('0'))   return '20' + cleaned.slice(1);
+    if (cleaned.length === 10)     return '20' + cleaned;
+    return cleaned;
   }
 
-  // Normalize existing Master_Students rows to ensure Net_Amount and Remaining_Balance are numeric and consistent
-  async normalizeMasterStudents() {
-    const sheet = await googleSheets.getSheetData('Master_Students');
-    if (sheet.length <= 1) return 0;
+  // ── Single student add ────────────────────────────────────────────────────
+  async addSingleStudent({ name, year, numberOfSubjects, totalFees, phoneNumber, discountPercent, enrollmentDate }) {
+    const totalFeesNum     = Number(totalFees)     || 0;
+    const discountPct      = Number(discountPercent) || 0;
+    const discountAmount   = Math.round(totalFeesNum * discountPct / 100);
+    const netAmount        = totalFeesNum - discountAmount;
+    const studentId        = this.generateStudentId();
+    const phone            = this.formatPhoneNumber(phoneNumber || '');
+    const enrolDate        = enrollmentDate ? moment(enrollmentDate).format('YYYY-MM-DD') : moment().format('YYYY-MM-DD');
 
-    const headers = sheet[0];
-    const rows = sheet.slice(1);
-    const updates = [];
-
-    rows.forEach((row, idx) => {
-      const r = {};
-      headers.forEach((h, i) => { r[h] = row[i] || ''; });
-
-      // Always compute netAmount from Total_Fees and Discount (prefer explicit Discount_Amount when present)
-      const totalFees = Number(r.Total_Fees || 0) || 0;
-      const discountPercent = Number(r.Discount_Percent || 0) || 0;
-      const discountAmount = Number(r.Discount_Amount) || Math.round(totalFees * discountPercent / 100) || 0;
-
-      // Force netAmount calculation from totalFees and discountAmount to avoid stale/zero values
-      const netAmount = Math.round(totalFees - discountAmount);
-
-      const totalPaid = Number(r.Total_Paid || 0) || 0;
-      // Recompute remaining balance from netAmount and totalPaid
-      const remainingBalance = Math.round(netAmount - totalPaid);
-
-      const updatedRow = [
-        r.Student_ID || '',
-        r.Name || '',
-        r.Year || '',
-        r.Number_of_Subjects || 0,
-        totalFees,
-        discountPercent,
-        discountAmount,
-        netAmount,
-        totalPaid,
-        remainingBalance,
-        r.Phone_Number || '',
-        r.Enrollment_Date || '',
-        remainingBalance <= 0 ? 'Paid' : (r.Status || 'Active'),
-        r.Last_Payment_Date || ''
-      ];
-
-      updates.push({ rowIndex: idx + 2, values: updatedRow });
-    });
-
-    // batch update rows (sequentially for simplicity)
-    for (const u of updates) {
-      await googleSheets.updateRow('Master_Students', u.rowIndex, u.values);
-    }
-
-    return updates.length;
+    const { rows } = await db.query(
+      `INSERT INTO students
+         (student_id, name, year, number_of_subjects, total_fees,
+          discount_percent, discount_amount, net_amount,
+          total_paid, remaining_balance, phone_number, enrollment_date, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,0,$8,$9,$10,'Active')
+       RETURNING *`,
+      [studentId, String(name).trim(), String(year).trim(),
+       Number(numberOfSubjects) || 0, totalFeesNum,
+       discountPct, discountAmount, netAmount,
+       phone, enrolDate]
+    );
+    return rows[0];
   }
 
-  /**
-   * Update student's total fees amount with comprehensive validation and atomic updates
-   * @param {string} studentId - Student ID
-   * @param {number} newTotalFees - New total fees amount
-   * @param {string} updatedBy - User who made the update (for audit logging)
-   * @returns {Promise<Object>} Updated student data
-   */
-  async updateStudentTotalFees(studentId, newTotalFees, updatedBy = 'System') {
+  // ── Excel bulk upload ─────────────────────────────────────────────────────
+  async processUploadedFile(filePath) {
     try {
-      console.log(`[updateStudentTotalFees] Starting update for student ${studentId} with new fees: ${newTotalFees}`);
+      const workbook  = XLSX.readFile(filePath);
+      const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows      = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
 
-      // Create automatic backup before making changes
-      try {
-        await googleSheets.createBackup();
-        console.log('[updateStudentTotalFees] Backup created successfully');
-      } catch (backupError) {
-        console.error('[updateStudentTotalFees] Warning: Failed to create backup:', backupError.message);
-        // Continue with update even if backup fails
+      const inserted = [];
+      for (const row of rows) {
+        const name = row.Name || row['Student Name'] || row['Full Name'] || row.name || '';
+        if (!name) continue;
+
+        const totalFees = parseFloat(
+          row['Total_Fees'] || row['Total Fees'] || row.Fees || row.Amount || row.Tuition || 0
+        );
+        const student = {
+          name,
+          year:             row.Year  || row.Grade  || row.Class  || '',
+          numberOfSubjects: parseInt(row['Number_of_Subjects'] || row['Number of Subjects'] || row.Subjects || 0),
+          totalFees,
+          phoneNumber:      row['Phone_Number'] || row['Phone Number'] || row.Phone || row.Mobile || '',
+          discountPercent:  0,
+          enrollmentDate:   null,
+        };
+        const result = await this.addSingleStudent(student);
+        inserted.push(result);
       }
 
-      // Input validation
-      if (!studentId) {
-        throw new Error('Student ID is required');
-      }
-
-      if (typeof newTotalFees !== 'number' || isNaN(newTotalFees)) {
-        throw new Error('New total fees must be a valid number');
-      }
-
-      if (newTotalFees < 0) {
-        throw new Error('Total fees cannot be negative');
-      }
-
-      // Validate reasonable range (0 to 1,000,000 EGP)
-      if (newTotalFees > 1000000) {
-        throw new Error('Total fees exceeds maximum allowed amount (1,000,000 EGP)');
-      }
-
-      // Get current student data
-      const student = await this.getStudentInfo(studentId);
-      if (!student) {
-        throw new Error('Student not found');
-      }
-
-      console.log(`[updateStudentTotalFees] Current student data:`, {
-        studentId: student.studentId,
-        name: student.name,
-        currentTotalFees: student.totalFees,
-        newTotalFees
-      });
-
-      // Calculate all derived fields based on new total fees
-      const discountPercent = student.discountPercent || 0;
-      const discountAmount = Math.round((newTotalFees * discountPercent) / 100);
-      const netAmount = Math.round(newTotalFees - discountAmount);
-      const totalPaid = student.totalPaid || 0;
-      const remainingBalance = Math.round(netAmount - totalPaid);
-      const status = remainingBalance <= 0 ? 'Paid' : 'Active';
-
-      console.log(`[updateStudentTotalFees] Calculated values:`, {
-        discountPercent,
-        discountAmount,
-        netAmount,
-        totalPaid,
-        remainingBalance,
-        status
-      });
-
-      // Prepare updated row for Master_Students
-      const updatedRow = [
-        student.studentId,
-        student.name,
-        student.year,
-        student.numberOfSubjects,
-        newTotalFees,          // Updated total fees
-        discountPercent,
-        discountAmount,        // Recalculated
-        netAmount,             // Recalculated
-        totalPaid,
-        remainingBalance,      // Recalculated
-        student.phoneNumber,
-        student.enrollmentDate,
-        status,                // May change based on new balance
-        student.lastPaymentDate
-      ];
-
-      // Atomic update to Master_Students sheet
-      console.log(`[updateStudentTotalFees] Updating Master_Students row ${student.rowIndex}`);
-      await googleSheets.updateRow('Master_Students', student.rowIndex, updatedRow);
-
-      // Update Analytics sheet
-      try {
-        console.log(`[updateStudentTotalFees] Updating Analytics sheet`);
-        const summary = await financeService.getFinancialSummary();
-        const overdueStudents = await paymentDueService.getOverdueStudents();
-        await googleSheets.writeAnalytics(summary, overdueStudents.length);
-      } catch (err) {
-        console.error('[updateStudentTotalFees] Warning: failed to update analytics:', err.message);
-        // Continue execution - analytics update failure shouldn't block the main operation
-      }
-
-      // Sync grade sheets from master
-      try {
-        console.log(`[updateStudentTotalFees] Syncing grade sheets`);
-        await this.syncGradeSheetsFromMaster();
-      } catch (err) {
-        console.error('[updateStudentTotalFees] Warning: failed to sync grade sheets:', err.message);
-        // Continue execution
-      }
-
-      // Check and update overdue payments
-      try {
-        console.log(`[updateStudentTotalFees] Checking overdue payments`);
-        await paymentDueService.checkOverduePayments();
-      } catch (err) {
-        console.error('[updateStudentTotalFees] Warning: failed to update overdue payments:', err.message);
-        // Continue execution
-      }
-
-      console.log(`[updateStudentTotalFees] Successfully updated student ${studentId}`);
-
-      // Return updated student data
-      return {
-        success: true,
-        student: {
-          studentId: student.studentId,
-          name: student.name,
-          year: student.year,
-          numberOfSubjects: student.numberOfSubjects,
-          totalFees: newTotalFees,
-          discountPercent,
-          discountAmount,
-          netAmount,
-          totalPaid,
-          remainingBalance,
-          phoneNumber: student.phoneNumber,
-          enrollmentDate: student.enrollmentDate,
-          status,
-          lastPaymentDate: student.lastPaymentDate
-        },
-        changes: {
-          oldTotalFees: student.totalFees,
-          newTotalFees,
-          oldNetAmount: student.netAmount,
-          newNetAmount: netAmount,
-          oldRemainingBalance: student.remainingBalance,
-          newRemainingBalance: remainingBalance
-        },
-        updatedBy,
-        updatedAt: moment().format('YYYY-MM-DD HH:mm:ss')
-      };
-    } catch (error) {
-      console.error(`[updateStudentTotalFees] Error updating student total fees:`, error);
-      throw error;
+      return { studentsProcessed: inserted.length, students: inserted };
+    } finally {
+      try { fs.unlinkSync(filePath); } catch (_) {}
     }
+  }
+
+  // ── Get student by ID or name ─────────────────────────────────────────────
+  async getStudentInfo(identifier) {
+    const { rows } = await db.query(
+      `SELECT * FROM students
+       WHERE student_id = $1
+          OR LOWER(name) LIKE LOWER($2)
+       LIMIT 1`,
+      [identifier, `%${identifier}%`]
+    );
+    return rows[0] ? this._mapStudent(rows[0]) : null;
+  }
+
+  // ── Get all students ──────────────────────────────────────────────────────
+  async getAllStudents(grade = null) {
+    let sql    = `SELECT * FROM students WHERE status != 'Deleted' ORDER BY name`;
+    const args = [];
+    if (grade && grade !== 'All') {
+      sql  = `SELECT * FROM students WHERE status != 'Deleted' AND year = $1 ORDER BY name`;
+      args.push(grade);
+    }
+    const { rows } = await db.query(sql, args);
+    return rows.map(this._mapStudent);
+  }
+
+  // ── Record payment ────────────────────────────────────────────────────────
+  async recordPayment(studentId, amountPaid, paymentMethod, discountPercent = null, processedBy = 'System') {
+    return db.transaction(async (client) => {
+      const { rows: sRows } = await client.query(
+        'SELECT * FROM students WHERE student_id = $1 FOR UPDATE', [studentId]
+      );
+      if (!sRows.length) throw new Error('Student not found');
+      const s = sRows[0];
+
+      // Apply discount if changed
+      let discountPct    = parseFloat(s.discount_percent) || 0;
+      let discountAmount = parseFloat(s.discount_amount)  || 0;
+      let netAmount      = parseFloat(s.net_amount)       || 0;
+
+      if (discountPercent !== null && discountPercent !== discountPct) {
+        discountPct    = discountPercent;
+        discountAmount = Math.round(parseFloat(s.total_fees) * discountPct / 100);
+        netAmount      = parseFloat(s.total_fees) - discountAmount;
+      }
+
+      const newTotalPaid        = parseFloat(s.total_paid) + amountPaid;
+      const newRemainingBalance = netAmount - newTotalPaid;
+      const paymentDate         = new Date();
+
+      // Installment number
+      const { rows: cfgRows } = await client.query(
+        "SELECT value FROM config WHERE setting = 'Number_of_Installments'"
+      );
+      const numInstallments  = parseInt(cfgRows[0]?.value || '3');
+      const installmentAmt   = netAmount / numInstallments;
+      const installmentNumber = Math.min(numInstallments, Math.ceil(newTotalPaid / (installmentAmt || 1)));
+
+      // Write payment log
+      const paymentId = this.generatePaymentId();
+      await client.query(
+        `INSERT INTO payments_log
+           (payment_id, student_id, student_name, payment_date, amount_paid,
+            payment_method, discount_applied, net_amount, remaining_balance,
+            installment_number, processed_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [paymentId, studentId, s.name, paymentDate, amountPaid,
+         paymentMethod, discountAmount, netAmount, newRemainingBalance,
+         installmentNumber, processedBy]
+      );
+
+      // Update student
+      const newStatus = newRemainingBalance <= 0 ? 'Paid' : 'Active';
+      await client.query(
+        `UPDATE students SET
+           discount_percent   = $1, discount_amount = $2, net_amount = $3,
+           total_paid         = $4, remaining_balance = $5,
+           status             = $6, last_payment_date = $7
+         WHERE student_id = $8`,
+        [discountPct, discountAmount, netAmount, newTotalPaid,
+         newRemainingBalance, newStatus, paymentDate, studentId]
+      );
+
+      // Auto bank deposit for non-cash
+      if (String(paymentMethod).toLowerCase() !== 'cash') {
+        const { generateDepositId } = require('./financeService');
+        await client.query(
+          `INSERT INTO bank_deposits (deposit_id, date, amount, bank_name, deposited_by, notes)
+           VALUES ($1,$2,$3,$4,$5,$6)`,
+          [generateDepositId(), paymentDate, amountPaid, paymentMethod, processedBy,
+           `Auto: student payment ${studentId}`]
+        );
+      }
+
+      return {
+        studentId, studentName: s.name, amountPaid, paymentMethod,
+        totalPaid: newTotalPaid, remainingBalance: newRemainingBalance,
+        installmentNumber, paymentDate
+      };
+    });
+  }
+
+  // ── Apply discount only ───────────────────────────────────────────────────
+  async applyDiscount(studentId, discountPercent) {
+    const { rows } = await db.query(
+      'SELECT * FROM students WHERE student_id = $1', [studentId]
+    );
+    if (!rows.length) throw new Error('Student not found');
+    const s = rows[0];
+
+    const totalFees      = parseFloat(s.total_fees);
+    const discountAmount = Math.round(totalFees * discountPercent / 100);
+    const netAmount      = totalFees - discountAmount;
+    const remaining      = netAmount - parseFloat(s.total_paid);
+
+    await db.query(
+      `UPDATE students SET
+         discount_percent = $1, discount_amount = $2, net_amount = $3, remaining_balance = $4
+       WHERE student_id = $5`,
+      [discountPercent, discountAmount, netAmount, Math.max(0, remaining), studentId]
+    );
+    return this.getStudentInfo(studentId);
+  }
+
+  // ── Update student fields ────────────────────────────────────────────────
+  async updateStudent(studentId, updates) {
+    const { rows } = await db.query(
+      'SELECT * FROM students WHERE student_id = $1', [studentId]
+    );
+    if (!rows.length) throw new Error(`Student ${studentId} not found`);
+    const s = rows[0];
+
+    const name     = updates.name           !== undefined ? String(updates.name).trim()               : s.name;
+    const year     = updates.year           !== undefined ? String(updates.year).trim()               : s.year;
+    const phone    = updates.phoneNumber    !== undefined ? this.formatPhoneNumber(updates.phoneNumber) : s.phone_number;
+    const subjects = updates.numberOfSubjects !== undefined ? Number(updates.numberOfSubjects)         : s.number_of_subjects;
+
+    const totalFees      = updates.totalFees       !== undefined ? Number(updates.totalFees)       : parseFloat(s.total_fees);
+    const discountPct    = updates.discountPercent !== undefined ? Number(updates.discountPercent) : parseFloat(s.discount_percent);
+    const discountAmount = Math.round(totalFees * discountPct / 100);
+    const netAmount      = totalFees - discountAmount;
+    const totalPaid      = parseFloat(s.total_paid);
+    const remaining      = Math.max(0, netAmount - totalPaid);
+    const status         = remaining <= 0 ? 'Paid' : (s.status === 'Paid' && remaining > 0 ? 'Active' : s.status);
+
+    const { rows: updated } = await db.query(
+      `UPDATE students SET
+         name = $1, year = $2, phone_number = $3, number_of_subjects = $4,
+         total_fees = $5, discount_percent = $6, discount_amount = $7,
+         net_amount = $8, remaining_balance = $9, status = $10
+       WHERE student_id = $11
+       RETURNING *`,
+      [name, year, phone, subjects, totalFees, discountPct,
+       discountAmount, netAmount, remaining, status, studentId]
+    );
+    return this._mapStudent(updated[0]);
+  }
+
+  // ── Update total fees ─────────────────────────────────────────────────────
+  async updateStudentTotalFees(studentId, newTotalFees) {
+    if (isNaN(newTotalFees) || newTotalFees < 0 || newTotalFees > 1000000)
+      throw new Error('Invalid totalFees value');
+    return this.updateStudent(studentId, { totalFees: newTotalFees });
+  }
+
+  // ── Soft delete ───────────────────────────────────────────────────────────
+  async deleteStudent(studentId) {
+    const { rows } = await db.query(
+      `UPDATE students SET status = 'Deleted'
+       WHERE student_id = $1 RETURNING student_id`,
+      [studentId]
+    );
+    if (!rows.length) throw new Error(`Student ${studentId} not found`);
+    return { studentId };
+  }
+
+  // ── Bulk update from Excel ────────────────────────────────────────────────
+  async bulkUpdateFromFile(filePath) {
+    const workbook  = XLSX.readFile(filePath);
+    const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows      = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+
+    const results = { updated: 0, skipped: 0, errors: [], studentsUpdated: 0 };
+
+    for (const row of rows) {
+      const studentId = row['Student_ID'] || row['StudentID'] || row['student_id'] || '';
+      if (!studentId) { results.skipped++; continue; }
+
+      const updates = {};
+      if (row.Name               || row.name)               updates.name             = row.Name || row.name;
+      if (row.Year               || row.Grade)               updates.year             = row.Year || row.Grade;
+      if (row['Phone_Number']    || row.Phone)               updates.phoneNumber      = row['Phone_Number'] || row.Phone;
+      if (row['Total_Fees']      || row.Fees)                updates.totalFees        = parseFloat(row['Total_Fees'] || row.Fees);
+      if (row['Discount_Percent']|| row.Discount)            updates.discountPercent  = parseFloat(row['Discount_Percent'] || row.Discount);
+      if (row['Number_of_Subjects']||row.Subjects)           updates.numberOfSubjects = parseInt(row['Number_of_Subjects'] || row.Subjects);
+
+      if (!Object.keys(updates).length) { results.skipped++; continue; }
+
+      try {
+        await this.updateStudent(studentId, updates);
+        results.updated++;
+      } catch (err) {
+        results.errors.push({ studentId, error: err.message });
+        results.skipped++;
+      }
+    }
+    results.studentsUpdated = results.updated;
+    return results;
+  }
+
+  // ── Import students array (JSON) ──────────────────────────────────────────
+  async importStudentsArray(studentsArray) {
+    let imported = 0;
+    for (const s of studentsArray) {
+      try {
+        await this.addSingleStudent({
+          name:             s.name || s.Name || '',
+          year:             s.year || s.Year || '',
+          numberOfSubjects: s.numberOfSubjects || 0,
+          totalFees:        s.totalFees || 0,
+          phoneNumber:      s.phoneNumber || '',
+          discountPercent:  s.discountPercent || 0,
+          enrollmentDate:   s.enrollmentDate  || null,
+        });
+        imported++;
+      } catch (err) {
+        console.error('[importStudentsArray] skipping row:', err.message);
+      }
+    }
+    return { imported };
+  }
+
+  // ── Export as XLSX buffer ─────────────────────────────────────────────────
+  async exportMasterSheet() {
+    const { rows } = await db.query(
+      `SELECT student_id,name,year,number_of_subjects,total_fees,discount_percent,
+              discount_amount,net_amount,total_paid,remaining_balance,
+              phone_number,enrollment_date,status,last_payment_date
+       FROM students WHERE status != 'Deleted' ORDER BY name`
+    );
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, ws, 'Master_Students');
+    return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  }
+
+  // ── Internal map ─────────────────────────────────────────────────────────
+  _mapStudent(row) {
+    if (!row) return null;
+    return {
+      studentId:        row.student_id,
+      name:             row.name,
+      year:             row.year,
+      numberOfSubjects: row.number_of_subjects,
+      totalFees:        parseFloat(row.total_fees),
+      discountPercent:  parseFloat(row.discount_percent),
+      discountAmount:   parseFloat(row.discount_amount),
+      netAmount:        parseFloat(row.net_amount),
+      totalPaid:        parseFloat(row.total_paid),
+      remainingBalance: parseFloat(row.remaining_balance),
+      phoneNumber:      row.phone_number,
+      enrollmentDate:   row.enrollment_date,
+      status:           row.status,
+      lastPaymentDate:  row.last_payment_date,
+    };
   }
 }
 

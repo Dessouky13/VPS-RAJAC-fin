@@ -1,396 +1,190 @@
+'use strict';
+const crypto = require('crypto');
 const moment = require('moment');
-const { v4: uuidv4 } = require('uuid');
-const googleSheets = require('./googleSheets');
+const db     = require('./db');
+
+function generateTransactionId() {
+  return `TXN${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
+}
+
+function generateDepositId() {
+  return `DEP${crypto.randomBytes(5).toString('hex').toUpperCase()}`;
+}
+
+// Export so other services can use them
+module.exports.generateDepositId = generateDepositId;
 
 class FinanceService {
-  async recordTransaction(type, amount, subject, payerReceiverName, paymentMethod, notes = '', processedBy = 'System') {
-    try {
-      const transactionId = this.generateTransactionId();
-      const date = moment().format('YYYY-MM-DD HH:mm:ss');
+  async recordTransaction(type, amount, subject, payerReceiverName, paymentMethod, notes = '', processedBy = 'System', customDate = null) {
+    const transactionId = generateTransactionId();
+    const date          = customDate ? new Date(customDate) : new Date();
 
-      const transactionRow = [
-        transactionId,
-        date,
-        type,
-        amount,
-        subject,
-        payerReceiverName,
-        paymentMethod,
-        notes,
-        processedBy
-      ];
-
-      await googleSheets.appendRows('In_Out_Transactions', [transactionRow]);
-
-      // Update analytics after recording a transaction (best-effort)
-      try {
-        const summary = await this.getFinancialSummary();
-        await googleSheets.writeAnalytics(summary);
-      } catch (err) {
-        console.error('Warning: failed to update analytics after transaction:', err && err.message ? err.message : err);
-      }
-
-      return {
-        success: true,
-        transaction: {
-          transactionId,
-          date,
-          type,
-          amount,
-          subject,
-          payerReceiverName,
-          paymentMethod,
-          notes,
-          processedBy
-        }
-      };
-    } catch (error) {
-      console.error('Error recording transaction:', error);
-      throw error;
-    }
+    await db.query(
+      `INSERT INTO transactions
+         (transaction_id, date, type, amount, subject, payer_receiver_name, payment_method, notes, processed_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [transactionId, date, type, amount, subject, payerReceiverName, paymentMethod, notes, processedBy]
+    );
+    return { transactionId, date, type, amount, subject, payerReceiverName, paymentMethod, notes, processedBy };
   }
 
   async recordBankDeposit(amount, bankName, depositedBy = 'System', notes = '') {
-    try {
-      const depositId = this.generateDepositId();
-      const date = moment().format('YYYY-MM-DD HH:mm:ss');
+    const depositId = generateDepositId();
+    const date      = new Date();
 
-      const depositRow = [
-        depositId,
-        date,
-        amount,
-        bankName,
-        depositedBy,
-        notes
-      ];
-
-      await googleSheets.appendRows('Bank_Deposits', [depositRow]);
-
-      // Update analytics after recording a bank deposit (best-effort)
-      try {
-        const summary = await this.getFinancialSummary();
-        await googleSheets.writeAnalytics(summary);
-      } catch (err) {
-        console.error('Warning: failed to update analytics after bank deposit:', err && err.message ? err.message : err);
-      }
-
-      return {
-        success: true,
-        deposit: {
-          depositId,
-          date,
-          amount,
-          bankName,
-          depositedBy,
-          notes
-        }
-      };
-    } catch (error) {
-      console.error('Error recording bank deposit:', error);
-      throw error;
-    }
-  }
-
-  generateTransactionId() {
-    const date = moment().format('YYYYMMDD');
-    const random = Math.floor(1000 + Math.random() * 9000);
-    return `TXN${date}${random}`;
-  }
-
-  generateDepositId() {
-    const date = moment().format('YYYYMMDD');
-    const random = Math.floor(100 + Math.random() * 900);
-    return `DEP${date}${random}`;
+    await db.query(
+      `INSERT INTO bank_deposits (deposit_id, date, amount, bank_name, deposited_by, notes)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [depositId, date, amount, bankName, depositedBy, notes]
+    );
+    return { depositId, date, amount, bankName, depositedBy, notes };
   }
 
   async getTransactions(startDate = null, endDate = null, type = null) {
-    try {
-      const data = await googleSheets.getSheetData('In_Out_Transactions');
-      if (data.length <= 1) return [];
-
-      const headers = data[0];
-      let transactions = data.slice(1).map(row => {
-        const transaction = {};
-        headers.forEach((header, index) => {
-          transaction[header] = row[index] || '';
-        });
-        return transaction;
-      });
-
-      if (type) {
-        transactions = transactions.filter(t => t.Type === type);
-      }
-
-      if (startDate && endDate) {
-        transactions = transactions.filter(t => {
-          const txnDate = moment(t.Date);
-          return txnDate.isBetween(moment(startDate), moment(endDate), null, '[]');
-        });
-      }
-
-      return transactions;
-    } catch (error) {
-      console.error('Error getting transactions:', error);
-      throw error;
-    }
+    let sql  = 'SELECT * FROM transactions WHERE TRUE';
+    const args = [];
+    let i = 1;
+    if (type)                  { sql += ` AND type = $${i++}`;                     args.push(type); }
+    if (startDate && endDate)  { sql += ` AND date BETWEEN $${i++} AND $${i++}`;   args.push(startDate, endDate); }
+    sql += ' ORDER BY date DESC';
+    const { rows } = await db.query(sql, args);
+    return rows;
   }
 
   async getBankDeposits(startDate = null, endDate = null) {
-    try {
-      const data = await googleSheets.getSheetData('Bank_Deposits');
-      if (data.length <= 1) return [];
-
-      const headers = data[0];
-      let deposits = data.slice(1).map(row => {
-        const deposit = {};
-        headers.forEach((header, index) => {
-          deposit[header] = row[index] || '';
-        });
-        return deposit;
-      });
-
-      if (startDate && endDate) {
-        deposits = deposits.filter(d => {
-          const depDate = moment(d.Date);
-          return depDate.isBetween(moment(startDate), moment(endDate), null, '[]');
-        });
-      }
-
-      return deposits;
-    } catch (error) {
-      console.error('Error getting bank deposits:', error);
-      throw error;
+    let sql  = 'SELECT * FROM bank_deposits WHERE TRUE';
+    const args = [];
+    if (startDate && endDate) {
+      sql += ' AND date BETWEEN $1 AND $2';
+      args.push(startDate, endDate);
     }
+    sql += ' ORDER BY date DESC';
+    const { rows } = await db.query(sql, args);
+    return rows;
   }
 
+  // S-3: Promise.allSettled — a single failing query won't crash the whole summary
   async getFinancialSummary() {
-    try {
-      const [students, transactions, deposits, payments] = await Promise.all([
-        googleSheets.getSheetData('Master_Students'),
-        googleSheets.getSheetData('In_Out_Transactions'),
-        googleSheets.getSheetData('Bank_Deposits'),
-        googleSheets.getSheetData('Payments_Log')
-      ]);
+    const [stuResult, txResult, depResult, payResult] = await Promise.allSettled([
+      db.query(`SELECT total_fees, net_amount, total_paid, remaining_balance, status FROM students WHERE status != 'Deleted'`),
+      db.query('SELECT type, amount, payment_method, date FROM transactions ORDER BY date'),
+      db.query('SELECT amount, date FROM bank_deposits ORDER BY date'),
+      db.query('SELECT amount_paid, payment_method, payment_date FROM payments_log ORDER BY payment_date'),
+    ]);
 
-      let totalCashInHand = 0;
-      let totalInBank = 0;
-      let totalStudentPayments = 0;
-      let totalExpenses = 0;
-      let totalIncome = 0;
+    const students     = stuResult.status  === 'fulfilled' ? stuResult.value.rows  : [];
+    const transactions = txResult.status   === 'fulfilled' ? txResult.value.rows   : [];
+    const deposits     = depResult.status  === 'fulfilled' ? depResult.value.rows  : [];
+    const payments     = payResult.status  === 'fulfilled' ? payResult.value.rows  : [];
 
-      // For richer analytics
-      const paymentsByMonth = {};
-      const transactionsByMonth = {};
-      const depositsByMonth = {};
-      const recent = [];
+    const isCash = (m) => String(m || '').toLowerCase() === 'cash';
 
-      if (payments.length > 1) {
-        const paymentHeaders = payments[0];
-        const amountIndex = paymentHeaders.indexOf('Amount_Paid');
-        const methodIndex = paymentHeaders.indexOf('Payment_Method');
-        const dateIndex = paymentHeaders.indexOf('Payment_Date');
+    let totalCashInHand = 0, totalInBank = 0;
+    let totalStudentPayments = 0, totalIncome = 0, totalExpenses = 0;
+    const paymentsByMonth = {}, transactionsByMonth = {}, depositsByMonth = {};
+    const recent = [];
 
-        // Treat Payments_Log as the canonical record of student payments.
-        // Bank_Deposits represent transfers (usually cash->bank) and other bank movements.
-        const isCashMethod = (m) => String(m || '').toLowerCase() === 'cash';
-
-        payments.slice(1).forEach(row => {
-          const amount = parseFloat(row[amountIndex] || 0) || 0;
-          const method = row[methodIndex] || '';
-          const dateStr = row[dateIndex] || '';
-          totalStudentPayments += amount;
-
-          if (isCashMethod(method)) {
-            totalCashInHand += amount;
-          } else {
-            // For non-cash student payments we'll consider the payment recorded here but
-            // only count bank increase when there is an explicit Bank_Deposits record.
-            // So do not add to totalInBank here to avoid double-counting.
-          }
-
-          // monthly aggregation
-          const month = require('moment')(dateStr || undefined).format('YYYY-MM');
-          paymentsByMonth[month] = (paymentsByMonth[month] || 0) + amount;
-
-          recent.push({ kind: 'payment', date: dateStr, amount, method, raw: row });
-        });
-      }
-
-      if (transactions.length > 1) {
-        const txnHeaders = transactions[0];
-        const typeIndex = txnHeaders.indexOf('Type');
-        const amountIndex = txnHeaders.indexOf('Amount');
-        const methodIndex = txnHeaders.indexOf('Payment_Method');
-        const dateIndex = txnHeaders.indexOf('Date');
-
-        transactions.slice(1).forEach(row => {
-          const type = (row[typeIndex] || '').toString().toLowerCase();
-          const amount = parseFloat(row[amountIndex] || 0) || 0;
-          const method = row[methodIndex] || '';
-          const dateStr = row[dateIndex] || '';
-
-          const isCash = String(method || '').toLowerCase() === 'cash';
-
-          if (type === 'in' || type === 'income') {
-            totalIncome += amount;
-            if (isCash) {
-              totalCashInHand += amount;
-            } else {
-              totalInBank += amount;
-            }
-          } else if (type === 'out' || type === 'expense') {
-            totalExpenses += amount;
-            if (isCash) {
-              totalCashInHand -= amount;
-            } else {
-              totalInBank -= amount;
-            }
-          }
-
-          const month = require('moment')(dateStr || undefined).format('YYYY-MM');
-          transactionsByMonth[month] = transactionsByMonth[month] || { income: 0, expenses: 0 };
-          if (type === 'in' || type === 'income') transactionsByMonth[month].income += amount;
-          if (type === 'out' || type === 'expense') transactionsByMonth[month].expenses += amount;
-
-          recent.push({ kind: 'transaction', date: dateStr, type, amount, method, raw: row });
-        });
-      }
-
-      if (deposits.length > 1) {
-        const depHeaders = deposits[0];
-        const amountIndex = depHeaders.indexOf('Amount');
-        const dateIndex = depHeaders.indexOf('Date');
-
-        deposits.slice(1).forEach(row => {
-          const amount = parseFloat(row[amountIndex] || 0) || 0;
-          const dateStr = row[dateIndex] || '';
-          // Bank deposits move cash into bank (typically cash collected deposited into bank)
-          totalInBank += amount;
-          totalCashInHand -= amount;
-
-          const month = require('moment')(dateStr || undefined).format('YYYY-MM');
-          depositsByMonth[month] = (depositsByMonth[month] || 0) + amount;
-
-          recent.push({ kind: 'deposit', date: dateStr, amount, raw: row });
-        });
-      }
-
-      let totalStudents = 0;
-      let activeStudents = 0;
-      let totalFeesExpected = 0;
-      let totalFeesCollected = 0;
-      let totalOutstanding = 0;
-
-      if (students.length > 1) {
-        const stuHeaders = students[0];
-        const netAmountIndex = stuHeaders.indexOf('Net_Amount');
-        const totalPaidIndex = stuHeaders.indexOf('Total_Paid');
-        const remainingIndex = stuHeaders.indexOf('Remaining_Balance');
-        const statusIndex = stuHeaders.indexOf('Status');
-
-        students.slice(1).forEach(row => {
-          totalStudents++;
-          const status = row[statusIndex] || '';
-          if (status.toLowerCase() === 'active') activeStudents++;
-
-          totalFeesExpected += parseFloat(row[netAmountIndex] || 0);
-          totalFeesCollected += parseFloat(row[totalPaidIndex] || 0);
-          totalOutstanding += parseFloat(row[remainingIndex] || 0);
-        });
-      }
-
-      // Build monthly summary for last 12 months (or available months)
-      const monthsSet = new Set([
-        ...Object.keys(paymentsByMonth),
-        ...Object.keys(transactionsByMonth),
-        ...Object.keys(depositsByMonth)
-      ]);
-
-      const months = Array.from(monthsSet).sort();
-      const monthly = months.map(m => {
-        const incomeFromTx = (transactionsByMonth[m] && transactionsByMonth[m].income) || 0;
-        const expensesFromTx = (transactionsByMonth[m] && transactionsByMonth[m].expenses) || 0;
-        const feesCollected = paymentsByMonth[m] || 0;
-        const depositsAmt = depositsByMonth[m] || 0;
-
-        // Total income = student fees + other income (IN transactions)
-        const totalMonthlyIncome = feesCollected + incomeFromTx;
-
-        // Net calculation: total income - expenses (deposits are transfers, not income)
-        const net = totalMonthlyIncome - expensesFromTx;
-
-        return {
-          month: m,
-          totalIncome: Math.round(totalMonthlyIncome * 100) / 100,
-          studentFees: Math.round(feesCollected * 100) / 100,
-          otherIncome: Math.round(incomeFromTx * 100) / 100,
-          expenses: Math.round(expensesFromTx * 100) / 100,
-          deposits: Math.round(depositsAmt * 100) / 100,
-          netProfit: Math.round(net * 100) / 100
-        };
-      });
-
-      // Recent items (latest 20)
-      recent.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
-      const recentItems = recent.slice(0, 20);
-
-      // Calculate overall totals with clarity
-      const overallTotalIncome = totalStudentPayments + totalIncome;
-      const overallNetProfit = overallTotalIncome - totalExpenses;
-      const totalLiquidAssets = totalCashInHand + totalInBank;
-
-      return {
-        // Liquidity Overview
-        cash: {
-          totalCashInHand: Math.max(0, Math.round(totalCashInHand * 100) / 100),
-          description: 'Current cash available in hand'
-        },
-        bank: {
-          totalInBank: Math.round(totalInBank * 100) / 100,
-          description: 'Total amount in bank accounts'
-        },
-        liquidity: {
-          totalLiquidAssets: Math.round(totalLiquidAssets * 100) / 100,
-          description: 'Total cash + bank balance'
-        },
-
-        // Student Financial Overview
-        students: {
-          totalStudents,
-          activeStudents,
-          totalFeesExpected: Math.round(totalFeesExpected * 100) / 100,
-          totalFeesCollected: Math.round(totalFeesCollected * 100) / 100,
-          totalOutstanding: Math.round(totalOutstanding * 100) / 100,
-          collectionRate: totalFeesExpected > 0
-            ? ((totalFeesCollected / totalFeesExpected) * 100).toFixed(2) + '%'
-            : '0%',
-          description: 'All student fee statistics'
-        },
-
-        // Overall Financial Performance
-        financial: {
-          totalIncome: Math.round(overallTotalIncome * 100) / 100,
-          studentFeesIncome: Math.round(totalStudentPayments * 100) / 100,
-          otherIncome: Math.round(totalIncome * 100) / 100,
-          totalExpenses: Math.round(totalExpenses * 100) / 100,
-          netProfit: Math.round(overallNetProfit * 100) / 100,
-          profitMargin: overallTotalIncome > 0
-            ? ((overallNetProfit / overallTotalIncome) * 100).toFixed(2) + '%'
-            : '0%',
-          description: 'Overall income, expenses, and profit'
-        },
-
-        // Monthly Breakdown
-        monthly,
-
-        // Recent Activity
-        recent: recentItems
-      };
-    } catch (error) {
-      console.error('Error getting financial summary:', error);
-      throw error;
+    for (const p of payments) {
+      const amt = parseFloat(p.amount_paid) || 0;
+      totalStudentPayments += amt;
+      if (isCash(p.payment_method)) totalCashInHand += amt;
+      const m = moment(p.payment_date).format('YYYY-MM');
+      paymentsByMonth[m] = (paymentsByMonth[m] || 0) + amt;
+      recent.push({ kind: 'payment', date: p.payment_date, amount: amt, method: p.payment_method });
     }
+
+    for (const t of transactions) {
+      const type = (t.type || '').toLowerCase();
+      const amt  = parseFloat(t.amount) || 0;
+      const cash = isCash(t.payment_method);
+      if (type === 'in' || type === 'income') {
+        totalIncome += amt;
+        if (cash) totalCashInHand += amt; else totalInBank += amt;
+      } else if (type === 'out' || type === 'expense') {
+        totalExpenses += amt;
+        if (cash) totalCashInHand -= amt; else totalInBank -= amt;
+      }
+      const m = moment(t.date).format('YYYY-MM');
+      transactionsByMonth[m] = transactionsByMonth[m] || { income: 0, expenses: 0 };
+      if (type === 'in'  || type === 'income')  transactionsByMonth[m].income   += amt;
+      if (type === 'out' || type === 'expense') transactionsByMonth[m].expenses += amt;
+      recent.push({ kind: 'transaction', date: t.date, type, amount: amt, method: t.payment_method });
+    }
+
+    for (const d of deposits) {
+      const amt = parseFloat(d.amount) || 0;
+      totalInBank += amt;
+      totalCashInHand -= amt;
+      const m = moment(d.date).format('YYYY-MM');
+      depositsByMonth[m] = (depositsByMonth[m] || 0) + amt;
+      recent.push({ kind: 'deposit', date: d.date, amount: amt });
+    }
+
+    let totalStudents = 0, activeStudents = 0;
+    let totalFeesExpected = 0, totalFeesCollected = 0, totalOutstanding = 0;
+    for (const s of students) {
+      totalStudents++;
+      if ((s.status || '').toLowerCase() === 'active') activeStudents++;
+      totalFeesExpected  += parseFloat(s.net_amount)        || 0;
+      totalFeesCollected += parseFloat(s.total_paid)        || 0;
+      totalOutstanding   += parseFloat(s.remaining_balance) || 0;
+    }
+
+    const months  = Array.from(new Set([
+      ...Object.keys(paymentsByMonth),
+      ...Object.keys(transactionsByMonth),
+      ...Object.keys(depositsByMonth),
+    ])).sort();
+
+    const monthly = months.map(m => {
+      const incomeFromTx  = transactionsByMonth[m]?.income   || 0;
+      const expensesFromTx = transactionsByMonth[m]?.expenses || 0;
+      const feesCollected  = paymentsByMonth[m] || 0;
+      const depositsAmt    = depositsByMonth[m] || 0;
+      const totalMonthlyIncome = feesCollected + incomeFromTx;
+      return {
+        month: m,
+        totalIncome:  Math.round(totalMonthlyIncome * 100) / 100,
+        studentFees:  Math.round(feesCollected      * 100) / 100,
+        otherIncome:  Math.round(incomeFromTx       * 100) / 100,
+        expenses:     Math.round(expensesFromTx     * 100) / 100,
+        deposits:     Math.round(depositsAmt        * 100) / 100,
+        netProfit:    Math.round((totalMonthlyIncome - expensesFromTx) * 100) / 100,
+      };
+    });
+
+    recent.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    const overallTotalIncome = totalStudentPayments + totalIncome;
+    const overallNetProfit   = overallTotalIncome - totalExpenses;
+
+    return {
+      cash:      { totalCashInHand: Math.max(0, Math.round(totalCashInHand * 100) / 100) },
+      bank:      { totalInBank:     Math.round(totalInBank               * 100) / 100  },
+      liquidity: { totalLiquidAssets: Math.round((Math.max(0, totalCashInHand) + totalInBank) * 100) / 100 },
+      students: {
+        totalStudents, activeStudents,
+        totalFeesExpected:  Math.round(totalFeesExpected  * 100) / 100,
+        totalFeesCollected: Math.round(totalFeesCollected * 100) / 100,
+        totalOutstanding:   Math.round(totalOutstanding   * 100) / 100,
+        collectionRate: totalFeesExpected > 0
+          ? ((totalFeesCollected / totalFeesExpected) * 100).toFixed(2) + '%' : '0%',
+      },
+      financial: {
+        totalIncome:       Math.round(overallTotalIncome  * 100) / 100,
+        studentFeesIncome: Math.round(totalStudentPayments* 100) / 100,
+        otherIncome:       Math.round(totalIncome         * 100) / 100,
+        totalExpenses:     Math.round(totalExpenses       * 100) / 100,
+        netProfit:         Math.round(overallNetProfit    * 100) / 100,
+        profitMargin: overallTotalIncome > 0
+          ? ((overallNetProfit / overallTotalIncome) * 100).toFixed(2) + '%' : '0%',
+      },
+      monthly,
+      recent: recent.slice(0, 20),
+    };
   }
 }
 
 module.exports = new FinanceService();
+module.exports.generateDepositId  = generateDepositId;
+module.exports.generateTransactionId = generateTransactionId;

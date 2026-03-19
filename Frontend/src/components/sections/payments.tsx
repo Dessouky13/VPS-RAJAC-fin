@@ -15,6 +15,7 @@ import {
   Receipt
 } from "lucide-react";
 import { getCashSummary, savePayment, API_CF } from "@/lib/api";
+import { useLastAction } from "@/contexts/LastActionContext";
 
 // Mock payment data
 const mockPayments = [
@@ -25,6 +26,7 @@ const mockPayments = [
 ];
 
 export function Payments() {
+  const { setLastAction } = useLastAction();
   const [payments] = useState(mockPayments);
   const [searchTerm, setSearchTerm] = useState("");
   const [showAddForm, setShowAddForm] = useState(false);
@@ -95,6 +97,7 @@ export function Payments() {
       };
       const res = await savePayment(payload);
       if (res.ok) {
+        setLastAction(`Payment: ${selectedStudent.name} — ${paymentForm.amount} EGP (${paymentForm.method})`);
         // dispatch finance updated so dashboard/balances refresh
         window.dispatchEvent(new CustomEvent('finance.updated'));
         setShowAddForm(false);

@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useAuth } from "@/contexts/AuthContext";
 import {
   Users,
   CreditCard,
@@ -10,7 +11,8 @@ import {
   PiggyBank,
   Home,
   FileSpreadsheet,
-  GraduationCap
+  GraduationCap,
+  UserPlus
 } from "lucide-react";
 
 interface NavItem {
@@ -20,49 +22,23 @@ interface NavItem {
   icon: React.ComponentType<{ className?: string }>;
   descriptionAr: string;
   descriptionEn: string;
+  adminOnly?: boolean;
 }
 
 const navItems: NavItem[] = [
-  { 
-    id: "fees", 
-    labelAr: "إدارة الرسوم", 
-    labelEn: "Fee Management",
-    icon: CreditCard, 
-    descriptionAr: "البحث عن الطلاب وتسجيل المدفوعات",
-    descriptionEn: "Search students and record payments"
-  },
-  { 
-    id: "due-report", 
-    labelAr: "تقرير المدفوعات المستحقة", 
-    labelEn: "Due Payments Report",
-    icon: Calendar, 
-    descriptionAr: "عرض الطلاب المتأخرين في السداد",
-    descriptionEn: "View students with overdue payments"
-  },
-  { 
-    id: "transactions", 
-    labelAr: "الإيرادات والمصروفات", 
-    labelEn: "Revenue & Expenses",
-    icon: TrendingUp, 
-    descriptionAr: "المعاملات المالية",
-    descriptionEn: "Financial transactions"
-  },
   {
-    id: "balances",
-    labelAr: "النقد والبنك والودائع",
-    labelEn: "Cash, Bank & Deposits",
-    icon: PiggyBank,
-    descriptionAr: "لوحة الأرصدة",
-    descriptionEn: "Balance dashboard"
+    id: "students",
+    labelAr: "تسجيل الطلاب",
+    labelEn: "Enroll Students",
+    icon: UserPlus,
+    descriptionAr: "إضافة طالب أو رفع ملف Excel",
+    descriptionEn: "Add student or upload Excel"
   },
-  {
-    id: "teachers",
-    labelAr: "إدارة المعلمين",
-    labelEn: "Teachers Management",
-    icon: GraduationCap,
-    descriptionAr: "إدارة المعلمين والرواتب",
-    descriptionEn: "Manage teachers and payments"
-  },
+  { id: "fees",         labelAr: "إدارة الرسوم",           labelEn: "Fee Management",       icon: CreditCard,    descriptionAr: "البحث وتسجيل المدفوعات",          descriptionEn: "Search & record payments",    adminOnly: true },
+  { id: "due-report",  labelAr: "تقرير المستحقات",         labelEn: "Due Payments Report",  icon: Calendar,      descriptionAr: "الطلاب المتأخرين في السداد",       descriptionEn: "Overdue students report",     adminOnly: true },
+  { id: "transactions",labelAr: "الإيرادات والمصروفات",    labelEn: "Revenue & Expenses",   icon: TrendingUp,    descriptionAr: "المعاملات المالية",                 descriptionEn: "Financial transactions",      adminOnly: true },
+  { id: "balances",    labelAr: "النقد والبنك",             labelEn: "Cash & Bank",          icon: PiggyBank,     descriptionAr: "لوحة الأرصدة",                     descriptionEn: "Balance dashboard",           adminOnly: true },
+  { id: "teachers",    labelAr: "إدارة المعلمين",           labelEn: "Teachers",             icon: GraduationCap, descriptionAr: "إدارة المعلمين والرواتب",           descriptionEn: "Manage teachers & salaries",  adminOnly: true },
 ];
 
 interface NavigationProps {
@@ -72,6 +48,8 @@ interface NavigationProps {
 
 export function Navigation({ activeSection, onSectionChange }: NavigationProps) {
   const { isArabic, t } = useLanguage();
+  const { isAdmin } = useAuth();
+  const visibleItems = navItems.filter(item => !item.adminOnly || isAdmin);
 
   return (
     <Card className="p-6 bg-gradient-card border-primary/10 card-hover fade-in" dir={isArabic ? "rtl" : "ltr"}>
@@ -79,7 +57,7 @@ export function Navigation({ activeSection, onSectionChange }: NavigationProps) 
         <h2 className="text-lg font-semibold text-foreground mb-6 slide-up">
           {t("إدارة المدرسة", "School Management")}
         </h2>
-        {navItems.map((item, index) => (
+        {visibleItems.map((item, index) => (
           <Button
             key={item.id}
             variant={activeSection === item.id ? "default" : "ghost"}
