@@ -1,7 +1,7 @@
 #!/bin/bash
 # ─────────────────────────────────────────────────────────────────────────────
-# RAJAC Finance Backend — VPS Deploy Script
-# Run this on your VPS from the Backend/ directory after git pull.
+# RAJAC Finance Backend — VPS Deploy Script  (updated 2026-03-19)
+# Run this ON the VPS: ssh Dessouky@128.140.65.42, then bash deploy-vps.sh
 #
 #   chmod +x deploy-vps.sh
 #   ./deploy-vps.sh
